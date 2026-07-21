@@ -17,15 +17,31 @@
 import pytest
 
 from trezorlib import ethereum
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib.debuglink import DebugSession as Session
 from trezorlib.tools import parse_path
 
 from ...common import parametrize_using_common_fixtures
+from ...input_flows import InputFlowShowAddressQRCode
 
 pytestmark = [pytest.mark.altcoin, pytest.mark.ethereum]
 
 
 @parametrize_using_common_fixtures("ethereum/getaddress.json")
-def test_getaddress(client: Client, parameters, result):
+def test_getaddress(session: Session, parameters, result):
     address_n = parse_path(parameters["path"])
-    assert ethereum.get_address(client, address_n) == result["address"]
+    assert (
+        ethereum.get_address(session, address_n, show_display=True) == result["address"]
+    )
+
+
+@pytest.mark.models("core", reason="No input flow for T1")
+@parametrize_using_common_fixtures("ethereum/getaddress.json")
+def test_getaddress_chunkify_details(session: Session, parameters, result):
+    with session.test_ctx as client:
+        IF = InputFlowShowAddressQRCode(session)
+        client.set_input_flow(IF.get())
+        address_n = parse_path(parameters["path"])
+        assert (
+            ethereum.get_address(session, address_n, show_display=True, chunkify=True)
+            == result["address"]
+        )

@@ -1,8 +1,11 @@
-from common import *
+# flake8: noqa: F403,F405
+from common import *  # isort:skip
 
-from trezorio import sdcard, fatfs
+if utils.USE_SD_CARD:
+    from trezorio import fatfs, sdcard
 
 
+@unittest.skipUnless(utils.USE_SD_CARD, "requires SD card")
 class TestTrezorIoFatfs(unittest.TestCase):
     def setUp(self):
         sdcard.power_on()
@@ -125,6 +128,7 @@ class TestTrezorIoFatfsLfn(TestTrezorIoFatfs):
         return f"reallylongdirname{suffix}"
 
 
+@unittest.skipUnless(utils.USE_SD_CARD, "requires SD card")
 class TestTrezorIoFatfsMounting(unittest.TestCase):
     MOUNTED_METHODS = [
         ("open", ("hello.txt", "w")),
@@ -208,6 +212,7 @@ class TestTrezorIoFatfsMounting(unittest.TestCase):
                 self.assertEqual(e.args[0], fatfs.FR_NOT_READY)
 
 
+@unittest.skipUnless(utils.USE_SD_CARD, "requires SD card")
 class TestTrezorIoFatfsAndSdcard(unittest.TestCase):
     def test_sd_power(self):
         sdcard.power_off()

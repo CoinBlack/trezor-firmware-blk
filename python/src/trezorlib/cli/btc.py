@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -14,6 +14,8 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
+from __future__ import annotations
+
 import base64
 import json
 from typing import TYPE_CHECKING, Dict, List, Optional, TextIO, Tuple
@@ -22,10 +24,17 @@ import click
 import construct as c
 
 from .. import btc, messages, protobuf, tools
-from . import ChoiceType, with_client
+from . import ChoiceType, with_session
 
 if TYPE_CHECKING:
-    from ..client import TrezorClient
+    from ..client import Session
+
+PURPOSE_BIP44 = 44
+PURPOSE_BIP48 = 48
+PURPOSE_BIP49 = 49
+PURPOSE_BIP84 = 84
+PURPOSE_BIP86 = 86
+PURPOSE_SLIP25 = 10025
 
 INPUT_SCRIPTS = {
     "address": messages.InputScriptType.SPENDADDRESS,
@@ -49,11 +58,27 @@ OUTPUT_SCRIPTS = {
     "tr": messages.OutputScriptType.PAYTOTAPROOT,
 }
 
-BIP_PURPOSE_TO_SCRIPT_TYPE = {
-    tools.H_(44): messages.InputScriptType.SPENDADDRESS,
-    tools.H_(49): messages.InputScriptType.SPENDP2SHWITNESS,
-    tools.H_(84): messages.InputScriptType.SPENDWITNESS,
-    tools.H_(86): messages.InputScriptType.SPENDTAPROOT,
+BIP_PURPOSE_TO_DEFAULT_SCRIPT_TYPE = {
+    PURPOSE_BIP44: messages.InputScriptType.SPENDADDRESS,
+    PURPOSE_BIP49: messages.InputScriptType.SPENDP2SHWITNESS,
+    PURPOSE_BIP84: messages.InputScriptType.SPENDWITNESS,
+    PURPOSE_BIP86: messages.InputScriptType.SPENDTAPROOT,
+    PURPOSE_SLIP25: messages.InputScriptType.SPENDTAPROOT,
+}
+
+SCRIPT_TYPE_TO_BIP_PURPOSES = {
+    messages.InputScriptType.SPENDADDRESS: (PURPOSE_BIP44,),
+    messages.InputScriptType.SPENDP2SHWITNESS: (PURPOSE_BIP49,),
+    messages.InputScriptType.SPENDWITNESS: (PURPOSE_BIP84,),
+    messages.InputScriptType.SPENDTAPROOT: (PURPOSE_BIP86, PURPOSE_SLIP25),
+}
+
+ACCOUNT_TYPE_TO_BIP_PURPOSE = {
+    "bip44": PURPOSE_BIP44,
+    "bip49": PURPOSE_BIP49,
+    "bip84": PURPOSE_BIP84,
+    "bip86": PURPOSE_BIP86,
+    "slip25": PURPOSE_SLIP25,
 }
 
 BIP48_SCRIPT_TYPES = {
@@ -99,19 +124,25 @@ def xpub_deserialize(xpubstr: str) -> Tuple[str, messages.HDNodeType]:
 
 
 def guess_script_type_from_path(address_n: List[int]) -> messages.InputScriptType:
-    if len(address_n) < 1:
+    if len(address_n) < 1 or not tools.is_hardened(address_n[0]):
         return messages.InputScriptType.SPENDADDRESS
 
-    purpose = address_n[0]
-    if purpose in BIP_PURPOSE_TO_SCRIPT_TYPE:
-        return BIP_PURPOSE_TO_SCRIPT_TYPE[purpose]
+    purpose = tools.unharden(address_n[0])
+    if purpose in BIP_PURPOSE_TO_DEFAULT_SCRIPT_TYPE:
+        return BIP_PURPOSE_TO_DEFAULT_SCRIPT_TYPE[purpose]
 
-    if purpose == tools.H_(48) and len(address_n) >= 4:
+    if purpose == PURPOSE_BIP48 and len(address_n) >= 4:
         script_type_field = address_n[3]
         if script_type_field in BIP48_SCRIPT_TYPES:
             return BIP48_SCRIPT_TYPES[script_type_field]
 
     return messages.InputScriptType.SPENDADDRESS
+
+
+def get_unlock_path(address_n: List[int]) -> Optional[List[int]]:
+    if address_n and address_n[0] == tools.H_(10025):
+        return address_n[:1]
+    return None
 
 
 @click.group(name="btc")
@@ -138,16 +169,25 @@ def cli() -> None:
     type=int,
     default=2,
 )
-@with_client
+@click.option(
+    "-s",
+    "--multisig-sort-pubkeys",
+    is_flag=True,
+    help="Sort pubkeys lexicographically using BIP-67",
+)
+@click.option("-C", "--chunkify", is_flag=True)
+@with_session
 def get_address(
-    client: "TrezorClient",
+    session: "Session",
     coin: str,
     address: str,
-    script_type: Optional[messages.InputScriptType],
+    script_type: messages.InputScriptType | None,
     show_display: bool,
     multisig_xpub: List[str],
-    multisig_threshold: Optional[int],
+    multisig_threshold: int | None,
     multisig_suffix_length: int,
+    multisig_sort_pubkeys: bool,
+    chunkify: bool,
 ) -> str:
     """Get address for specified path.
 
@@ -180,8 +220,16 @@ def get_address(
 
         multisig_suffix = address_n[-multisig_suffix_length:]
         nodes = [xpub_deserialize(x)[1] for x in multisig_xpub]
+        pubkeys_order = (
+            messages.MultisigPubkeysOrder.LEXICOGRAPHIC
+            if multisig_sort_pubkeys
+            else messages.MultisigPubkeysOrder.PRESERVED
+        )
         multisig = messages.MultisigRedeemScriptType(
-            nodes=nodes, address_n=multisig_suffix, m=multisig_threshold
+            nodes=nodes,
+            address_n=multisig_suffix,
+            m=multisig_threshold,
+            pubkeys_order=pubkeys_order,
         )
         if script_type == messages.InputScriptType.SPENDADDRESS:
             script_type = messages.InputScriptType.SPENDMULTISIG
@@ -189,24 +237,26 @@ def get_address(
         multisig = None
 
     return btc.get_address(
-        client,
+        session,
         coin,
         address_n,
         show_display,
         script_type=script_type,
         multisig=multisig,
+        unlock_path=get_unlock_path(address_n),
+        chunkify=chunkify,
     )
 
 
 @cli.command()
 @click.option("-c", "--coin", default=DEFAULT_COIN)
-@click.option("-n", "--address", required=True, help="BIP-32 path, e.g. m/44'/0'/0'")
+@click.option("-n", "--address", required=True, help="BIP-32 path, e.g. m/44h/0h/0h")
 @click.option("-e", "--curve")
 @click.option("-t", "--script-type", type=ChoiceType(INPUT_SCRIPTS))
 @click.option("-d", "--show-display", is_flag=True)
-@with_client
+@with_session
 def get_public_node(
-    client: "TrezorClient",
+    session: "Session",
     coin: str,
     address: str,
     curve: Optional[str],
@@ -218,12 +268,13 @@ def get_public_node(
     if script_type is None:
         script_type = guess_script_type_from_path(address_n)
     result = btc.get_public_node(
-        client,
+        session,
         address_n,
         ecdsa_curve_name=curve,
         show_display=show_display,
         coin_name=coin,
         script_type=script_type,
+        unlock_path=get_unlock_path(address_n),
     )
     return {
         "node": {
@@ -243,45 +294,63 @@ def _append_descriptor_checksum(desc: str) -> str:
 
 
 def _get_descriptor(
-    client: "TrezorClient",
+    session: "Session",
     coin: Optional[str],
-    account: str,
-    script_type: messages.InputScriptType,
+    account: int,
+    purpose: Optional[int],
+    script_type: Optional[messages.InputScriptType],
     show_display: bool,
 ) -> str:
-    coin = coin or DEFAULT_COIN
-    if script_type == messages.InputScriptType.SPENDADDRESS:
-        acc_type = 44
-        fmt = "pkh({})"
-    elif script_type == messages.InputScriptType.SPENDP2SHWITNESS:
-        acc_type = 49
-        fmt = "sh(wpkh({}))"
-    elif script_type == messages.InputScriptType.SPENDWITNESS:
-        acc_type = 84
-        fmt = "wpkh({})"
-    elif script_type == messages.InputScriptType.SPENDTAPROOT:
-        acc_type = 86
-        fmt = "tr({})"
+    if purpose is None:
+        if script_type is None:
+            script_type = messages.InputScriptType.SPENDADDRESS
+        purpose = SCRIPT_TYPE_TO_BIP_PURPOSES[script_type][0]
+    elif script_type is None:
+        script_type = BIP_PURPOSE_TO_DEFAULT_SCRIPT_TYPE[purpose]
     else:
-        raise ValueError("Unsupported account type")
+        if purpose not in SCRIPT_TYPE_TO_BIP_PURPOSES[script_type]:
+            raise ValueError("Invalid script type for account type")
 
-    if coin is None or coin == "Bitcoin":
+    coin = coin or DEFAULT_COIN
+    if coin == "Bitcoin":
         coin_type = 0
     elif coin == "Testnet" or coin == "Regtest":
         coin_type = 1
     else:
         raise ValueError("Unsupported coin")
 
-    path = f"m/{acc_type}'/{coin_type}'/{account}'"
+    path = f"m/{purpose}h/{coin_type}h/{account}h"
+    if purpose == PURPOSE_SLIP25:
+        if script_type == messages.InputScriptType.SPENDTAPROOT:
+            path += "/1h"
+        else:
+            raise ValueError("Unsupported SLIP25 script type")
+
     n = tools.parse_path(path)
     pub = btc.get_public_node(
-        client,
+        session,
         n,
         show_display=show_display,
         coin_name=coin,
         script_type=script_type,
         ignore_xpub_magic=True,
+        unlock_path=get_unlock_path(n),
     )
+
+    # Starting with core 2.6.5 the descriptor is included in the response.
+    if pub.descriptor is not None:
+        return pub.descriptor
+
+    if script_type == messages.InputScriptType.SPENDADDRESS:
+        fmt = "pkh({})"
+    elif script_type == messages.InputScriptType.SPENDP2SHWITNESS:
+        fmt = "sh(wpkh({}))"
+    elif script_type == messages.InputScriptType.SPENDWITNESS:
+        fmt = "wpkh({})"
+    elif script_type == messages.InputScriptType.SPENDTAPROOT:
+        fmt = "tr({})"
+    else:
+        raise ValueError("Unsupported script type")
 
     fingerprint = pub.root_fingerprint if pub.root_fingerprint is not None else 0
     descriptor = f"[{fingerprint:08x}{path[1:]}]{pub.xpub}/<0;1>/*"
@@ -293,19 +362,23 @@ def _get_descriptor(
 @click.option(
     "-n", "--account", required=True, type=int, help="account index (0 = first account)"
 )
-@click.option("-t", "--script-type", type=ChoiceType(INPUT_SCRIPTS), default="address")
+@click.option("-a", "--account-type", type=ChoiceType(ACCOUNT_TYPE_TO_BIP_PURPOSE))
+@click.option("-t", "--script-type", type=ChoiceType(INPUT_SCRIPTS))
 @click.option("-d", "--show-display", is_flag=True)
-@with_client
+@with_session
 def get_descriptor(
-    client: "TrezorClient",
+    session: "Session",
     coin: Optional[str],
-    account: str,
-    script_type: messages.InputScriptType,
+    account: int,
+    account_type: Optional[int],
+    script_type: Optional[messages.InputScriptType],
     show_display: bool,
 ) -> str:
     """Get descriptor of given account."""
     try:
-        return _get_descriptor(client, coin, account, script_type, show_display)
+        return _get_descriptor(
+            session, coin, account, account_type, script_type, show_display
+        )
     except ValueError as e:
         raise click.ClickException(str(e))
 
@@ -317,9 +390,10 @@ def get_descriptor(
 
 @cli.command()
 @click.option("-c", "--coin", is_flag=True, hidden=True, expose_value=False)
+@click.option("-C", "--chunkify", is_flag=True)
 @click.argument("json_file", type=click.File())
-@with_client
-def sign_tx(client: "TrezorClient", json_file: TextIO) -> None:
+@with_session
+def sign_tx(session: "Session", json_file: TextIO, chunkify: bool) -> None:
     """Sign transaction.
 
     Transaction data must be provided in a JSON file. See `transaction-format.md` for
@@ -344,11 +418,12 @@ def sign_tx(client: "TrezorClient", json_file: TextIO) -> None:
     }
 
     _, serialized_tx = btc.sign_tx(
-        client,
+        session,
         coin,
         inputs,
         outputs,
         prev_txes=prev_txes,
+        chunkify=chunkify,
         **details,
     )
 
@@ -372,22 +447,30 @@ def sign_tx(client: "TrezorClient", json_file: TextIO) -> None:
     is_flag=True,
     help="Generate Electrum-compatible signature",
 )
+@click.option("-C", "--chunkify", is_flag=True)
 @click.argument("message")
-@with_client
+@with_session
 def sign_message(
-    client: "TrezorClient",
+    session: "Session",
     coin: str,
     address: str,
     message: str,
     script_type: Optional[messages.InputScriptType],
     electrum_compat: bool,
+    chunkify: bool,
 ) -> Dict[str, str]:
     """Sign message using address of given path."""
     address_n = tools.parse_path(address)
     if script_type is None:
         script_type = guess_script_type_from_path(address_n)
     res = btc.sign_message(
-        client, coin, address_n, message, script_type, electrum_compat
+        session,
+        coin,
+        address_n,
+        message,
+        script_type,
+        electrum_compat,
+        chunkify=chunkify,
     )
     return {
         "message": message,
@@ -398,18 +481,21 @@ def sign_message(
 
 @cli.command()
 @click.option("-c", "--coin", default=DEFAULT_COIN)
+@click.option("-C", "--chunkify", is_flag=True)
 @click.argument("address")
 @click.argument("signature")
 @click.argument("message")
-@with_client
+@with_session
 def verify_message(
-    client: "TrezorClient", coin: str, address: str, signature: str, message: str
+    session: "Session",
+    coin: str,
+    address: str,
+    signature: str,
+    message: str,
+    chunkify: bool,
 ) -> bool:
     """Verify message."""
     signature_bytes = base64.b64decode(signature)
-    return btc.verify_message(client, coin, address, signature_bytes, message)
-
-
-#
-# deprecated interactive signing
-# ALL BELOW is legacy code and will be dropped
+    return btc.verify_message(
+        session, coin, address, signature_bytes, message, chunkify=chunkify
+    )

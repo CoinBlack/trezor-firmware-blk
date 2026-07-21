@@ -4,7 +4,95 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [1.11.2] (17th August 2022)
+## 1.14.1 [18th March 2026]
+
+### Security
+- Enforce advanced recovery for mnemonics shorter than 24 words.
+
+### Changed
+- Allow using Ethereum mainnet addresses on all non-Ethereum networks. This enables access to networks like Hyperliquid that use conflicting chain IDs and cannot obtain official SLIP-44 registration.  [#5134]
+- Allow ETH staking operations regardless of source.  [#6358]
+
+### Security
+- Warn if Ethereum data is too long.
+
+## 1.14.0 [21st January 2026]
+
+### Added
+- Send BIP-380 descriptor in GetPublicKey response.  [#3576]
+
+### Changed
+- Deprecate ETH Holesky testnet and use Hoodi testnet instead.  [#5942]
+
+### Fixed
+- Fix cancellation handling during `GetPublicKey`.  [#5133]
+- Use network symbol instead of EVM network shortcut.  [#5194]
+- Make sure EVM symbol is visible.  [#5204]
+- Increase access list capacity of Ethereum EIP1559 transactions from 8 to 12.  [#5257]
+
+## 1.13.1 [21st May 2025]
+
+### Added
+- Clear sign ETH staking transactions on Everstake pool.  [#4851]
+- Entropy check workflow in ResetDevice.
+
+### Fixed
+- Use `GWei` when formatting large ETH amounts.  [#4932]
+
+## 1.13.0 [19th February 2025]
+
+### Added
+- Signed Ethereum network and token definitions from host.  [#15]
+- Unchained paths for p2wsh multisig.  [#4324]
+- Added support for lexicographic sorting of pubkeys in multisig.  [#4396]
+
+### Changed
+- Changed prefix of public key returned by `get_ecdh_session_key` for curve25519.  [#4093]
+- Remove deprecated Unchained Capital's multisig path.  [#4396]
+- Forbid per-node paths in multisig change outputs and multisig receive addresses.  [#4396]
+- Forbid multisig to singlesig change outputs.  [#4396]
+- Reworked PIN processing.  [#3949]
+
+### Removed
+- CoSi functionality.  [#2675]
+- MUE support.  [#3216]
+- Removed display_random feature.  [#4119]
+
+### Fixed
+- Allow showing XPUB using a QR code.  [#3043]
+- Stellar: resolves the issue of incorrect signature generation when the transaction source account differs from the signing account.  [#3691]
+- Fixed SLIP-10 fingerprints for ed25519 and curve25519.  [#4093]
+
+## 1.12.1 [15th March 2023]
+
+### Added
+- Support Ledger Live legacy derivation path `m/44'/coin_type'/0'/account`.  [#1749]
+- Show fee rate when replacing transaction.  [#2442]
+- T1 bootloader: verify firmware signatures based on SignMessage, add signature debugging.  [#2568]
+- Allow proposed Casa m/45' multisig paths for Bitcoin and Ethereum.  [#2682]
+- Implement SLIP-0025 coinjoin accounts.  [#2718]
+- Implement `serialize` option in SignTx.  [#2718]
+- Support native SegWit external inputs with non-ownership proof.  [#2718]
+- Implement SLIP-0019 proofs of ownership for native SegWit.  [#2718]
+- Implement coinjoin signing.  [#2718]
+
+### Changed
+- Do not convert bech32 addresses to uppercase in QR code to increase compatibility.  [#2190]
+- Extend decimals of fee rate to 2 digits.  [#2486]
+- Display only sat instead of sat BTC.  [#2487]
+- Increase `SignIdentity.challenge_hidden` max_size to 512 bytes.  [#2743]
+- Included bootloader 1.12.1.
+
+### Fixed
+- Bootloader VTOR and FW handover fix.
+- Show full Stellar address and QR code.  [#1453]
+- Wrap long Ethereum fee to next line if it does not fit.  [#2373]
+
+### Security
+- Match and validate script type of change-outputs in Bitcoin signing.
+
+
+## 1.11.2 [17th August 2022]
 
 ### Added
 - Show the fee rate on the signing confirmation screen.  [#2249]
@@ -507,6 +595,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - Removed all current limits on size of signed transaction.
 
+[#15]: https://github.com/trezor/trezor-firmware/pull/15
 [#131]: https://github.com/trezor/trezor-firmware/pull/131
 [#965]: https://github.com/trezor/trezor-firmware/pull/965
 [#1018]: https://github.com/trezor/trezor-firmware/pull/1018
@@ -522,6 +611,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 [#1369]: https://github.com/trezor/trezor-firmware/pull/1369
 [#1402]: https://github.com/trezor/trezor-firmware/pull/1402
 [#1415]: https://github.com/trezor/trezor-firmware/pull/1415
+[#1453]: https://github.com/trezor/trezor-firmware/pull/1453
 [#1461]: https://github.com/trezor/trezor-firmware/pull/1461
 [#1491]: https://github.com/trezor/trezor-firmware/pull/1491
 [#1518]: https://github.com/trezor/trezor-firmware/pull/1518
@@ -538,6 +628,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 [#1705]: https://github.com/trezor/trezor-firmware/pull/1705
 [#1710]: https://github.com/trezor/trezor-firmware/pull/1710
 [#1743]: https://github.com/trezor/trezor-firmware/pull/1743
+[#1749]: https://github.com/trezor/trezor-firmware/pull/1749
 [#1755]: https://github.com/trezor/trezor-firmware/pull/1755
 [#1765]: https://github.com/trezor/trezor-firmware/pull/1765
 [#1767]: https://github.com/trezor/trezor-firmware/pull/1767
@@ -559,9 +650,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 [#2115]: https://github.com/trezor/trezor-firmware/pull/2115
 [#2144]: https://github.com/trezor/trezor-firmware/pull/2144
 [#2181]: https://github.com/trezor/trezor-firmware/pull/2181
+[#2190]: https://github.com/trezor/trezor-firmware/pull/2190
 [#2239]: https://github.com/trezor/trezor-firmware/pull/2239
 [#2249]: https://github.com/trezor/trezor-firmware/pull/2249
 [#2261]: https://github.com/trezor/trezor-firmware/pull/2261
+[#2289]: https://github.com/trezor/trezor-firmware/pull/2289
+[#2373]: https://github.com/trezor/trezor-firmware/pull/2373
 [#2394]: https://github.com/trezor/trezor-firmware/pull/2394
 [#2422]: https://github.com/trezor/trezor-firmware/pull/2422
 [#2433]: https://github.com/trezor/trezor-firmware/pull/2433
+[#2442]: https://github.com/trezor/trezor-firmware/pull/2442
+[#2486]: https://github.com/trezor/trezor-firmware/pull/2486
+[#2487]: https://github.com/trezor/trezor-firmware/pull/2487
+[#2568]: https://github.com/trezor/trezor-firmware/pull/2568
+[#2675]: https://github.com/trezor/trezor-firmware/pull/2675
+[#2682]: https://github.com/trezor/trezor-firmware/pull/2682
+[#2718]: https://github.com/trezor/trezor-firmware/pull/2718
+[#2743]: https://github.com/trezor/trezor-firmware/pull/2743
+[#3043]: https://github.com/trezor/trezor-firmware/pull/3043
+[#3216]: https://github.com/trezor/trezor-firmware/pull/3216
+[#3576]: https://github.com/trezor/trezor-firmware/pull/3576
+[#3691]: https://github.com/trezor/trezor-firmware/pull/3691
+[#3949]: https://github.com/trezor/trezor-firmware/pull/3949
+[#4093]: https://github.com/trezor/trezor-firmware/pull/4093
+[#4119]: https://github.com/trezor/trezor-firmware/pull/4119
+[#4324]: https://github.com/trezor/trezor-firmware/pull/4324
+[#4396]: https://github.com/trezor/trezor-firmware/pull/4396
+[#4851]: https://github.com/trezor/trezor-firmware/pull/4851
+[#4932]: https://github.com/trezor/trezor-firmware/pull/4932
+[#5133]: https://github.com/trezor/trezor-firmware/pull/5133
+[#5134]: https://github.com/trezor/trezor-firmware/pull/5134
+[#5194]: https://github.com/trezor/trezor-firmware/pull/5194
+[#5204]: https://github.com/trezor/trezor-firmware/pull/5204
+[#5257]: https://github.com/trezor/trezor-firmware/pull/5257
+[#5942]: https://github.com/trezor/trezor-firmware/pull/5942
+[#6358]: https://github.com/trezor/trezor-firmware/pull/6358

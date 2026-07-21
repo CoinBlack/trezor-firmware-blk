@@ -1,6 +1,5 @@
 ifneq ($(EMULATOR),1)
 OBJS += setup.o
-OBJS += startup.o
 OBJS += timer.o
 endif
 
@@ -16,11 +15,13 @@ OBJS += oled.o
 OBJS += random_delays.o
 OBJS += rng.o
 OBJS += supervise.o
+OBJS += time_estimate.o
 OBJS += usb21_standard.o
 OBJS += usb_standard.o
 OBJS += util.o
 OBJS += webusb.o
 OBJS += winusb.o
+OBJS += vendor/trezor-storage/flash_area.o
 
 libtrezor.a: $(OBJS)
 
@@ -30,7 +31,8 @@ libtrezor.a:
 	@printf "  AR      $@\n"
 	$(Q)$(AR) rcs $@ $^
 
-.PHONY: vendor build_unix test_emu test_emu_ui test_emu_ui_record
+.PHONY: vendor build_unix test_emu test_emu_ui test_emu_ui_record \
+        flash_firmware_jlink flash_bootloader_jlink
 
 vendor:
 	git submodule update --init --recursive
@@ -43,7 +45,14 @@ test_emu: ## run integration tests
 	./script/test $(TESTOPTS)
 
 test_emu_ui: ## run ui integration tests
-	./script/test --ui=test --ui-check-missing $(TESTOPTS)
+	./script/test --ui=test --ui-check-missing --do-master-diff $(TESTOPTS)
 
 test_emu_ui_record: ## record and hash screens for ui integration tests
-	./script/test --ui=record --ui-check-missing $(TESTOPTS)
+	./script/test --ui=record --ui-check-missing --do-master-diff $(TESTOPTS)
+
+flash_firmware_jlink:
+	JLinkExe -nogui 1 -commanderscript firmware/firmware_flash.jlink
+
+flash_bootloader_jlink:
+	JLinkExe -nogui 1 -commanderscript bootloader/bootloader_flash.jlink
+

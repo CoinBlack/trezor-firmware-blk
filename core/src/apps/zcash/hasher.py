@@ -8,9 +8,7 @@ specification: https://zips.z.cash/zip-0244
 from typing import TYPE_CHECKING
 
 from trezor.crypto.hashlib import blake2b
-from trezor.utils import HashWriter, empty_bytearray
 
-from apps.bitcoin.common import SigHashType
 from apps.bitcoin.writers import (
     TX_HASH_SIZE,
     write_bytes_fixed,
@@ -23,10 +21,13 @@ from apps.bitcoin.writers import (
 )
 
 if TYPE_CHECKING:
-    from trezor.messages import TxInput, TxOutput, SignTx, PrevTx
-    from trezor.utils import Writer
-    from apps.common.coininfo import CoinInfo
     from typing import Sequence
+
+    from trezor.messages import PrevTx, SignTx, TxInput, TxOutput
+    from trezor.utils import HashWriter, Writer
+
+    from apps.bitcoin.common import SigHashType
+    from apps.common.coininfo import CoinInfo
 
 
 def write_hash(w: Writer, hash: bytes) -> None:
@@ -38,8 +39,16 @@ def write_prevout(w: Writer, txi: TxInput) -> None:
     write_uint32(w, txi.prev_index)
 
 
+def blake_hash_writer_32(personal: bytes) -> HashWriter:
+    from trezor.utils import HashWriter
+
+    return HashWriter(blake2b(outlen=32, personal=personal))
+
+
 class ZcashHasher:
-    def __init__(self, tx: SignTx | PrevTx):
+    def __init__(self, tx: SignTx | PrevTx) -> None:
+        from trezor.utils import empty_bytearray
+
         self.header = HeaderHasher(tx)
         self.transparent = TransparentHasher()
         self.sapling = SaplingHasher()
@@ -53,20 +62,20 @@ class ZcashHasher:
 
     # The `txid_digest` method is currently a dead code,
     # but we keep it for future use cases.
-    def txid_digest(self) -> bytes:
-        """
-        Returns the transaction identifier.
+    if False:  # noqa
 
-        see: https://zips.z.cash/zip-0244#id4
-        """
-        h = HashWriter(blake2b(outlen=32, personal=self.tx_hash_person))
+        def txid_digest(self) -> bytes:
+            """
+            Returns the transaction identifier.
 
-        write_hash(h, self.header.digest())  # T.1
-        write_hash(h, self.transparent.digest())  # T.2
-        write_hash(h, self.sapling.digest())  # T.3
-        write_hash(h, self.orchard.digest())  # T.4
+            see: https://zips.z.cash/zip-0244#id4
+            """
+            h = blake_hash_writer_32(self.tx_hash_person)
 
-        return h.get_digest()
+            write_hash(h, self.header.digest())  # T.1
+            write_hash(h, self.transparent.digest())  # T.2
+            write_hash(h, self.sapling.digest())  # T.3
+            write_hash(h, self.orchard.digest())  # T.4
 
     def signature_digest(
         self, txi: TxInput | None, script_pubkey: bytes | None
@@ -76,7 +85,7 @@ class ZcashHasher:
 
         see: https://zips.z.cash/zip-0244#id13
         """
-        h = HashWriter(blake2b(outlen=32, personal=self.tx_hash_person))
+        h = blake_hash_writer_32(self.tx_hash_person)
 
         write_hash(h, self.header.digest())  # S.1
         write_hash(h, self.transparent.sig_digest(txi, script_pubkey))  # S.2
@@ -121,8 +130,8 @@ class ZcashHasher:
 
 
 class HeaderHasher:
-    def __init__(self, tx: SignTx | PrevTx):
-        h = HashWriter(blake2b(outlen=32, personal=b"ZTxIdHeadersHash"))
+    def __init__(self, tx: SignTx | PrevTx) -> None:
+        h = blake_hash_writer_32(b"ZTxIdHeadersHash")
 
         assert tx.version_group_id is not None
         assert tx.branch_id is not None  # checked in sanitize_*
@@ -147,25 +156,20 @@ class HeaderHasher:
 
 class TransparentHasher:
     def __init__(self) -> None:
-        self.prevouts = HashWriter(
-            blake2b(outlen=32, personal=b"ZTxIdPrevoutHash")
-        )  # a hasher for fields T.2a & S.2b
+        # a hasher for fields T.2a & S.2b
+        self.prevouts = blake_hash_writer_32(b"ZTxIdPrevoutHash")
 
-        self.amounts = HashWriter(
-            blake2b(outlen=32, personal=b"ZTxTrAmountsHash")
-        )  # a hasher for field S.2c
+        # a hasher for field S.2c
+        self.amounts = blake_hash_writer_32(b"ZTxTrAmountsHash")
 
-        self.scriptpubkeys = HashWriter(
-            blake2b(outlen=32, personal=b"ZTxTrScriptsHash")
-        )  # a hasher for field S.2d
+        # a hasher for field S.2d
+        self.scriptpubkeys = blake_hash_writer_32(b"ZTxTrScriptsHash")
 
-        self.sequence = HashWriter(
-            blake2b(outlen=32, personal=b"ZTxIdSequencHash")
-        )  # a hasher for fields T.2b & S.2e
+        # a hasher for fields T.2b & S.2e
+        self.sequence = blake_hash_writer_32(b"ZTxIdSequencHash")
 
-        self.outputs = HashWriter(
-            blake2b(outlen=32, personal=b"ZTxIdOutputsHash")
-        )  # a hasher for fields T.2c & S.2f
+        # a hasher for fields T.2c & S.2f
+        self.outputs = blake_hash_writer_32(b"ZTxIdOutputsHash")
 
         self.empty = True  # inputs_amount + outputs_amount == 0
 
@@ -188,7 +192,7 @@ class TransparentHasher:
 
         see: https://zips.z.cash/zip-0244#t-2-transparent-digest
         """
-        h = HashWriter(blake2b(outlen=32, personal=b"ZTxIdTranspaHash"))
+        h = blake_hash_writer_32(b"ZTxIdTranspaHash")
 
         if not self.empty:
             write_hash(h, self.prevouts.get_digest())  # T.2a
@@ -208,13 +212,14 @@ class TransparentHasher:
 
         see: https://zips.z.cash/zip-0244#s-2-transparent-sig-digest
         """
+        from apps.bitcoin.common import SigHashType
 
         if self.empty:
             assert txi is None
             assert script_pubkey is None
             return self.digest()
 
-        h = HashWriter(blake2b(outlen=32, personal=b"ZTxIdTranspaHash"))
+        h = blake_hash_writer_32(b"ZTxIdTranspaHash")
 
         # only SIGHASH_ALL is supported in Trezor
         write_uint8(h, SigHashType.SIGHASH_ALL)  # S.2a
@@ -238,7 +243,7 @@ def _txin_sig_digest(
     see: https://zips.z.cash/zip-0244#s-2g-txin-sig-digest
     """
 
-    h = HashWriter(blake2b(outlen=32, personal=b"Zcash___TxInHash"))
+    h = blake_hash_writer_32(b"Zcash___TxInHash")
 
     if txi is not None:
         assert script_pubkey is not None

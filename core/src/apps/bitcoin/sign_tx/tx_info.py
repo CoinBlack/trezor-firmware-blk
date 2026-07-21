@@ -1,55 +1,37 @@
 from micropython import const
 from typing import TYPE_CHECKING
 
-from trezor import wire
-from trezor.crypto.hashlib import sha256
-from trezor.utils import HashWriter
-
-from .. import common, writers
-from ..common import BIP32_WALLET_DEPTH, input_is_external
-from .matchcheck import MultisigFingerprintChecker, WalletPathChecker
+from .. import writers
 
 if TYPE_CHECKING:
+    from buffer_types import AnyBytes
     from typing import Protocol
-    from trezor.messages import (
-        PrevTx,
-        SignTx,
-        TxInput,
-        TxOutput,
-    )
-    from .sig_hasher import SigHasher
+
+    from trezor.messages import PrevTx, SignTx, TxInput, TxOutput
+    from trezor.utils import HashWriter
 
     from apps.common.coininfo import CoinInfo
+
+    from .sig_hasher import SigHasher
 
     class Signer(Protocol):
         coin: CoinInfo
 
-        def create_hash_writer(self) -> HashWriter:
-            ...
+        def create_hash_writer(self) -> HashWriter: ...
 
-        def create_sig_hasher(self, tx: SignTx | PrevTx) -> SigHasher:
-            ...
+        def create_sig_hasher(self, tx: SignTx | PrevTx) -> SigHasher: ...
 
         def write_tx_header(
             self,
             w: writers.Writer,
             tx: SignTx | PrevTx,
             witness_marker: bool,
-        ) -> None:
-            ...
+        ) -> None: ...
 
         async def write_prev_tx_footer(
-            self, w: writers.Writer, tx: PrevTx, prev_hash: bytes
-        ) -> None:
-            ...
+            self, w: writers.Writer, tx: PrevTx, prev_hash: AnyBytes
+        ) -> None: ...
 
-
-# The chain id used for change.
-_BIP32_CHANGE_CHAIN = const(1)
-
-# The maximum allowed change address. This should be large enough for normal
-# use and still allow to quickly brute-force the correct BIP32 path.
-_BIP32_MAX_LAST_ELEMENT = const(1_000_000)
 
 # Setting nSequence to this value for every input in a transaction disables nLockTime.
 _SEQUENCE_FINAL = const(0xFFFF_FFFF)
@@ -61,11 +43,12 @@ _MAX_BIP125_RBF_SEQUENCE = const(0xFFFF_FFFD)
 
 class TxInfoBase:
     def __init__(self, signer: Signer, tx: SignTx | PrevTx) -> None:
-        # Checksum of multisig inputs, used to validate change-output.
-        self.multisig_fingerprint = MultisigFingerprintChecker()
+        from trezor.crypto.hashlib import sha256
+        from trezor.utils import HashWriter
 
-        # Common prefix of input paths, used to validate change-output.
-        self.wallet_path = WalletPathChecker()
+        from .change_detector import ChangeDetector
+
+        self.change_detector = ChangeDetector()
 
         # h_tx_check is used to make sure that the inputs and outputs streamed in
         # different steps are the same every time, e.g. the ones streamed for approval
@@ -83,36 +66,22 @@ class TxInfoBase:
         # The minimum nSequence of all inputs.
         self.min_sequence = _SEQUENCE_FINAL
 
-    def add_input(self, txi: TxInput, script_pubkey: bytes) -> None:
+    def add_input(self, txi: TxInput, script_pubkey: AnyBytes) -> None:
         # all inputs are included (non-segwit as well)
         self.sig_hasher.add_input(txi, script_pubkey)
         writers.write_tx_input_check(self.h_tx_check, txi)
         self.min_sequence = min(self.min_sequence, txi.sequence)
+        self.change_detector.add_input(txi)
 
-        if not input_is_external(txi):
-            self.wallet_path.add_input(txi)
-            self.multisig_fingerprint.add_input(txi)
-
-    def add_output(self, txo: TxOutput, script_pubkey: bytes) -> None:
+    def add_output(self, txo: TxOutput, script_pubkey: AnyBytes) -> None:
         self.sig_hasher.add_output(txo, script_pubkey)
         writers.write_tx_output(self.h_tx_check, txo, script_pubkey)
 
     def check_input(self, txi: TxInput) -> None:
-        self.wallet_path.check_input(txi)
-        self.multisig_fingerprint.check_input(txi)
+        self.change_detector.check_input(txi)
 
     def output_is_change(self, txo: TxOutput) -> bool:
-        if txo.script_type not in common.CHANGE_OUTPUT_SCRIPT_TYPES:
-            return False
-        if txo.multisig and not self.multisig_fingerprint.output_matches(txo):
-            return False
-        return (
-            self.wallet_path.output_matches(txo)
-            and len(txo.address_n) >= BIP32_WALLET_DEPTH
-            and txo.address_n[-2] <= _BIP32_CHANGE_CHAIN
-            and txo.address_n[-1] <= _BIP32_MAX_LAST_ELEMENT
-            and txo.amount > 0
-        )
+        return self.change_detector.output_is_change(txo)
 
     def lock_time_disabled(self) -> bool:
         return self.min_sequence == _SEQUENCE_FINAL
@@ -133,7 +102,7 @@ class TxInfo(TxInfoBase):
 
 # Used to keep track of any original transactions which are being replaced by the current transaction.
 class OriginalTxInfo(TxInfoBase):
-    def __init__(self, signer: Signer, tx: PrevTx, orig_hash: bytes) -> None:
+    def __init__(self, signer: Signer, tx: PrevTx, orig_hash: AnyBytes) -> None:
         super().__init__(signer, tx)
         self.tx = tx
         self.signer = signer
@@ -150,11 +119,11 @@ class OriginalTxInfo(TxInfoBase):
         signer.write_tx_header(self.h_tx, tx, witness_marker=False)
         writers.write_compact_size(self.h_tx, tx.inputs_count)
 
-    def add_input(self, txi: TxInput, script_pubkey: bytes) -> None:
+    def add_input(self, txi: TxInput, script_pubkey: AnyBytes) -> None:
         super().add_input(txi, script_pubkey)
         writers.write_tx_input(self.h_tx, txi, txi.script_sig or bytes())
 
-    def add_output(self, txo: TxOutput, script_pubkey: bytes) -> None:
+    def add_output(self, txo: TxOutput, script_pubkey: AnyBytes) -> None:
         super().add_output(txo, script_pubkey)
 
         if self.index == 0:
@@ -163,6 +132,8 @@ class OriginalTxInfo(TxInfoBase):
         writers.write_tx_output(self.h_tx, txo, script_pubkey)
 
     async def finalize_tx_hash(self) -> None:
+        from trezor import wire
+
         await self.signer.write_prev_tx_footer(self.h_tx, self.tx, self.orig_hash)
         if self.orig_hash != writers.get_tx_hash(
             self.h_tx, double=self.signer.coin.sign_hash_double, reverse=True

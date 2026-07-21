@@ -306,7 +306,7 @@ Trezor sets `request_type` to `TXPAYMENTREQ`, and `request_details.tx_hash` is u
 `request_details.request_index` is the index of the payment request in the transaction:
 0 is the first payment request, 1 is second, etc.
 
-The host must respond with a `TxAckPaymentRequest` message.
+The host must respond with a `PaymentRequest` message.
 
 ## Replacement transactions
 
@@ -329,9 +329,9 @@ signatures.
 
 A replacement transaction in Trezor must satisfy the following requirements:
 
-* All inputs of the original transactions must be inputs of the replacement transation.
+* All inputs of the original transactions must be inputs of the replacement transaction.
 * All _external_ outputs of the original transactions must be outputs of the replacement
-  transation.
+  transaction.
 * The value of an external output may be decreased only if there are no new external
   inputs. This should only be used to bump the fee if the original transaction transfers
   the entire account balance and there is no other source available to bump the fee.

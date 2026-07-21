@@ -5,16 +5,16 @@ from trezor.enums import MessageType
 
 if TYPE_CHECKING:
     from trezor import protobuf
-
     from trezor.messages import (
         StellarAccountMergeOp,
         StellarAllowTrustOp,
         StellarBumpSequenceOp,
         StellarChangeTrustOp,
+        StellarClaimClaimableBalanceOp,
         StellarCreateAccountOp,
         StellarCreatePassiveSellOfferOp,
-        StellarManageDataOp,
         StellarManageBuyOfferOp,
+        StellarManageDataOp,
         StellarManageSellOfferOp,
         StellarPathPaymentStrictReceiveOp,
         StellarPathPaymentStrictSendOp,
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
         | StellarPathPaymentStrictSendOp
         | StellarPaymentOp
         | StellarSetOptionsOp
+        | StellarClaimClaimableBalanceOp
     )
 
 
@@ -57,28 +58,9 @@ op_codes: dict[int, int] = {
     MessageType.StellarPathPaymentStrictSendOp: 13,
     MessageType.StellarPaymentOp: 1,
     MessageType.StellarSetOptionsOp: 5,
+    MessageType.StellarClaimClaimableBalanceOp: 15,
 }
 
-op_wire_types = [
-    MessageType.StellarAccountMergeOp,
-    MessageType.StellarAllowTrustOp,
-    MessageType.StellarBumpSequenceOp,
-    MessageType.StellarChangeTrustOp,
-    MessageType.StellarCreateAccountOp,
-    MessageType.StellarCreatePassiveSellOfferOp,
-    MessageType.StellarManageDataOp,
-    MessageType.StellarManageBuyOfferOp,
-    MessageType.StellarManageSellOfferOp,
-    MessageType.StellarPathPaymentStrictReceiveOp,
-    MessageType.StellarPathPaymentStrictSendOp,
-    MessageType.StellarPaymentOp,
-    MessageType.StellarSetOptionsOp,
-]
-
-# https://github.com/stellar/go/blob/e0ffe19f58879d3c31e2976b97a5bf10e13a337b/xdr/xdr_generated.go#L584
-ASSET_TYPE_NATIVE = const(0)
-ASSET_TYPE_ALPHANUM4 = const(1)
-ASSET_TYPE_ALPHANUM12 = const(2)
 
 # https://www.stellar.org/developers/guides/concepts/accounts.html#balance
 # https://github.com/stellar/go/blob/3d2c1defe73dbfed00146ebe0e8d7e07ce4bb1b6/amount/main.go#L23

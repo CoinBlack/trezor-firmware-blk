@@ -1,13 +1,8 @@
-from common import *
-from trezor import log, loop, utils
+# flake8: noqa: F403,F405
+from common import *  # isort:skip
 
 if not utils.BITCOIN_ONLY:
-    from apps.monero.xmr.serialize.int_serialize import (
-        dump_uint,
-        dump_uvarint,
-        load_uint,
-        load_uvarint,
-    )
+    from apps.monero.xmr.serialize.int_serialize import dump_uvarint, load_uvarint
     from apps.monero.xmr.serialize.readwriter import MemoryReaderWriter
     from apps.monero.xmr.serialize_messages.base import ECPoint
     from apps.monero.xmr.serialize_messages.tx_prefix import TxinToKey
@@ -15,9 +10,6 @@ if not utils.BITCOIN_ONLY:
 
 @unittest.skipUnless(not utils.BITCOIN_ONLY, "altcoin")
 class TestMoneroSerializer(unittest.TestCase):
-    def __init__(self, *args, **kwargs):
-        super(TestMoneroSerializer, self).__init__(*args, **kwargs)
-
     def test_varint(self):
         """
         Var int
@@ -56,7 +48,7 @@ class TestMoneroSerializer(unittest.TestCase):
         :return:
         """
         msg = TxinToKey(
-            amount=123, key_offsets=[1, 2, 3, 2 ** 76], k_image=bytearray(range(32))
+            amount=123, key_offsets=[1, 2, 3, 2**76], k_image=bytearray(range(32))
         )
 
         writer = MemoryReaderWriter()

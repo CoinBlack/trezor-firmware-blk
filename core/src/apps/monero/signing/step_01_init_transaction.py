@@ -2,11 +2,9 @@
 Initializes a new transaction.
 """
 
-import gc
 from typing import TYPE_CHECKING
 
-from apps.monero import layout, misc, signing
-from apps.monero.signing.state import State
+from apps.monero import signing
 from apps.monero.xmr import crypto, crypto_helpers, monero
 
 if TYPE_CHECKING:
@@ -18,6 +16,9 @@ if TYPE_CHECKING:
         MoneroTransactionRsigData,
     )
 
+    from apps.monero.layout import MoneroTransactionProgress
+    from apps.monero.signing.state import State
+
 
 async def init_transaction(
     state: State,
@@ -25,11 +26,18 @@ async def init_transaction(
     network_type: int,
     tsx_data: MoneroTransactionData,
     keychain,
+    progress: MoneroTransactionProgress,
 ) -> MoneroTransactionInitAck:
-    from apps.monero.signing import offloading_keys
-    from apps.common import paths
+    import gc
 
-    await paths.validate_path(state.ctx, keychain, address_n)
+    from apps.common import paths
+    from apps.monero import layout, misc
+    from apps.monero.signing import offloading_keys
+
+    mem_trace = state.mem_trace  # local_cache_attribute
+    outputs = tsx_data.outputs  # local_cache_attribute
+
+    await paths.validate_path(keychain, address_n)
 
     state.creds = misc.get_creds(keychain, address_n, network_type)
     state.client_version = tsx_data.client_version or 0
@@ -39,22 +47,25 @@ async def init_transaction(
     state.fee = state.fee if state.fee > 0 else 0
     state.tx_priv = crypto.random_scalar()
     state.tx_pub = crypto.scalarmult_base_into(None, state.tx_priv)
-    state.mem_trace(1)
+    mem_trace(1)
 
     state.input_count = tsx_data.num_inputs
-    state.output_count = len(tsx_data.outputs)
+    state.output_count = len(outputs)
     assert state.input_count is not None
     state.progress_total = 4 + 3 * state.input_count + state.output_count
     state.progress_cur = 0
 
     # Ask for confirmation
     await layout.require_confirm_transaction(
-        state.ctx, state, tsx_data, state.creds.network_type
+        state,
+        tsx_data,
+        state.creds.network_type,
+        progress,
     )
     state.creds.address = None
     state.creds.network_type = None
     gc.collect()
-    state.mem_trace(3)
+    mem_trace(3)
 
     # Basic transaction parameters
     state.output_change = tsx_data.change_dts
@@ -67,7 +78,7 @@ async def init_transaction(
         raise ValueError("Unsupported hard-fork version")
 
     # Ensure change is correct
-    _check_change(state, tsx_data.outputs)
+    _check_change(state, outputs)
 
     # At least two outputs are required, this applies also for sweep txs
     # where one fake output is added. See _check_change for more info
@@ -75,7 +86,7 @@ async def init_transaction(
         raise signing.NotEnoughOutputsError("At least two outputs are required")
 
     _check_rsig_data(state, tsx_data.rsig_data)
-    _check_subaddresses(state, tsx_data.outputs)
+    _check_subaddresses(state, outputs)
 
     # Extra processing, payment id
     _process_payment_id(state, tsx_data)
@@ -86,7 +97,7 @@ async def init_transaction(
     state.tx_prefix_hasher.uvarint(2)  # current Monero transaction format (RingCT = 2)
     state.tx_prefix_hasher.uvarint(tsx_data.unlock_time)
     state.tx_prefix_hasher.uvarint(state.input_count)  # ContainerType, size
-    state.mem_trace(10, True)
+    mem_trace(10, True)
 
     # Final message hasher
     state.full_message_hasher.init()
@@ -94,26 +105,27 @@ async def init_transaction(
 
     # Sub address precomputation
     if tsx_data.account is not None and tsx_data.minor_indices:
-        _precompute_subaddr(state, tsx_data.account, tsx_data.minor_indices)
-    state.mem_trace(5, True)
+        # _precompute_subaddr
+        # Precomputes subaddresses for account (major) and list of indices (minors)
+        # Subaddresses have to be stored in encoded form - unique representation.
+        # Single point can have multiple extended coordinates representation - would not match during subaddress search.
+        monero.compute_subaddresses(
+            state.creds, tsx_data.account, tsx_data.minor_indices, state.subaddresses
+        )
+    mem_trace(5, True)
 
     # HMACs all outputs to disallow tampering.
     # Each HMAC is then sent alongside the output
     # and trezor validates it.
     hmacs = []
     for idx in range(state.output_count):
-        c_hmac = offloading_keys.gen_hmac_tsxdest(
-            state.key_hmac, tsx_data.outputs[idx], idx
-        )
+        c_hmac = offloading_keys.gen_hmac_tsxdest(state.key_hmac, outputs[idx], idx)
         hmacs.append(c_hmac)
         gc.collect()
 
-    state.mem_trace(6)
+    mem_trace(6)
 
-    from trezor.messages import (
-        MoneroTransactionInitAck,
-        MoneroTransactionRsigData,
-    )
+    from trezor.messages import MoneroTransactionInitAck, MoneroTransactionRsigData
 
     rsig_data = MoneroTransactionRsigData(offload_type=int(state.rsig_offload))
 
@@ -207,24 +219,19 @@ def _check_rsig_data(state: State, rsig_data: MoneroTransactionRsigData) -> None
     elif rsig_data.rsig_type not in (1, 2, 3):
         raise ValueError("Unknown rsig type")
 
-    state.tx_type = signing.RctType.CLSAG
-    if rsig_data.bp_version == 4:
-        state.rsig_is_bp_plus = True
-        state.tx_type = signing.RctType.RCTTypeBulletproofPlus
+    state.tx_type = signing.RctType.RCTTypeBulletproofPlus
+    if rsig_data.bp_version != 4:
+        raise ValueError("Unknown BP version")
 
     if state.output_count > 2:
         state.rsig_offload = True
 
-    _check_grouping(state)
-
-
-def _check_grouping(state: State) -> None:
+    # _check_grouping
     acc = 0
     for x in state.rsig_grouping:
         if x is None or x <= 0:
             raise ValueError("Invalid grouping batch")
         acc += x
-
     if acc != state.output_count:
         raise ValueError("Invalid grouping")
 
@@ -283,6 +290,7 @@ def _compute_sec_keys(state: State, tsx_data: MoneroTransactionData) -> None:
     Generate master key H( H(TsxData || tx_priv) || rand )
     """
     from trezor import protobuf
+
     from apps.monero.xmr.keccak_hasher import get_keccak_writer
 
     writer = get_keccak_writer()
@@ -294,15 +302,6 @@ def _compute_sec_keys(state: State, tsx_data: MoneroTransactionData) -> None:
     )
     state.key_hmac = crypto_helpers.keccak_2hash(b"hmac" + master_key)
     state.key_enc = crypto_helpers.keccak_2hash(b"enc" + master_key)
-
-
-def _precompute_subaddr(state: State, account: int, indices: list[int]) -> None:
-    """
-    Precomputes subaddresses for account (major) and list of indices (minors)
-    Subaddresses have to be stored in encoded form - unique representation.
-    Single point can have multiple extended coordinates representation - would not match during subaddress search.
-    """
-    monero.compute_subaddresses(state.creds, account, indices, state.subaddresses)
 
 
 def _process_payment_id(state: State, tsx_data: MoneroTransactionData) -> None:
@@ -320,29 +319,29 @@ def _process_payment_id(state: State, tsx_data: MoneroTransactionData) -> None:
     See:
     - https://github.com/monero-project/monero/blob/ff7dc087ae5f7de162131cea9dbcf8eac7c126a1/src/cryptonote_basic/tx_extra.h
     """
+    payment_id = tsx_data.payment_id  # local_cache_attribute
+
     # encrypted payment id / dummy payment ID
     view_key_pub_enc = None
 
-    if not tsx_data.payment_id or len(tsx_data.payment_id) == 8:
+    if not payment_id or len(payment_id) == 8:
         view_key_pub_enc = _get_key_for_payment_id_encryption(
             tsx_data, state.change_address(), True
         )
 
-    if not tsx_data.payment_id:
+    if not payment_id:
         return
 
-    elif len(tsx_data.payment_id) == 8:
+    elif len(payment_id) == 8:
         view_key_pub = crypto_helpers.decodepoint(view_key_pub_enc)
-        payment_id_encr = _encrypt_payment_id(
-            tsx_data.payment_id, view_key_pub, state.tx_priv
-        )
+        payment_id_encr = _encrypt_payment_id(payment_id, view_key_pub, state.tx_priv)
 
         extra_nonce = payment_id_encr
         extra_prefix = 1  # TX_EXTRA_NONCE_ENCRYPTED_PAYMENT_ID
 
     # plain text payment id
-    elif len(tsx_data.payment_id) == 32:
-        extra_nonce = tsx_data.payment_id
+    elif len(payment_id) == 32:
+        extra_nonce = payment_id
         extra_prefix = 0  # TX_EXTRA_NONCE_PAYMENT_ID
 
     else:
@@ -371,8 +370,9 @@ def _get_key_for_payment_id_encryption(
     payment id encryption. If no encrypted payment ID is chosen,
     dummy payment ID is set for better transaction uniformity if possible.
     """
-    from apps.monero.xmr.addresses import addr_eq
     from trezor.messages import MoneroAccountPublicAddress
+
+    from apps.monero.xmr.addresses import addr_eq
 
     addr = MoneroAccountPublicAddress(
         spend_public_key=crypto_helpers.NULL_KEY_ENC,

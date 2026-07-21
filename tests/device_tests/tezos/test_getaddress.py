@@ -16,19 +16,34 @@
 
 import pytest
 
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib.debuglink import DebugSession as Session
 from trezorlib.tezos import get_address
 from trezorlib.tools import parse_path
 
+from ...input_flows import InputFlowShowAddressQRCode
 
-@pytest.mark.altcoin
-@pytest.mark.tezos
-@pytest.mark.skip_t1
-def test_tezos_get_address(client: Client):
-    path = parse_path("m/44h/1729h/0h")
-    address = get_address(client, path, show_display=True)
-    assert address == "tz1Kef7BSg6fo75jk37WkKRYSnJDs69KVqt9"
+pytestmark = [pytest.mark.altcoin, pytest.mark.tezos, pytest.mark.models("core")]
 
-    path = parse_path("m/44h/1729h/1h")
-    address = get_address(client, path, show_display=True)
-    assert address == "tz1ekQapZCX4AXxTJhJZhroDKDYLHDHegvm1"
+TEST_VECTORS = [
+    ("m/44h/1729h/0h", "tz1Kef7BSg6fo75jk37WkKRYSnJDs69KVqt9"),
+    ("m/44h/1729h/1h", "tz1ekQapZCX4AXxTJhJZhroDKDYLHDHegvm1"),
+]
+
+
+@pytest.mark.parametrize("path, expected_address", TEST_VECTORS)
+def test_tezos_get_address(session: Session, path: str, expected_address: str):
+    address = get_address(session, parse_path(path), show_display=True)
+    assert address == expected_address
+
+
+@pytest.mark.parametrize("path, expected_address", TEST_VECTORS)
+def test_tezos_get_address_chunkify_details(
+    session: Session, path: str, expected_address: str
+):
+    with session.test_ctx as client:
+        IF = InputFlowShowAddressQRCode(session)
+        client.set_input_flow(IF.get())
+        address = get_address(
+            session, parse_path(path), show_display=True, chunkify=True
+        )
+        assert address == expected_address

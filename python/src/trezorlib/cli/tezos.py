@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -20,12 +20,12 @@ from typing import TYPE_CHECKING, TextIO
 import click
 
 from .. import messages, protobuf, tezos, tools
-from . import with_client
+from . import with_session
 
 if TYPE_CHECKING:
-    from ..client import TrezorClient
+    from ..client import Session
 
-PATH_HELP = "BIP-32 path, e.g. m/44'/1729'/0'"
+PATH_HELP = "BIP-32 path, e.g. m/44h/1729h/0h"
 
 
 @click.group(name="tezos")
@@ -36,32 +36,36 @@ def cli() -> None:
 @cli.command()
 @click.option("-n", "--address", required=True, help=PATH_HELP)
 @click.option("-d", "--show-display", is_flag=True)
-@with_client
-def get_address(client: "TrezorClient", address: str, show_display: bool) -> str:
+@click.option("-C", "--chunkify", is_flag=True)
+@with_session
+def get_address(
+    session: "Session", address: str, show_display: bool, chunkify: bool
+) -> str:
     """Get Tezos address for specified path."""
     address_n = tools.parse_path(address)
-    return tezos.get_address(client, address_n, show_display)
+    return tezos.get_address(session, address_n, show_display, chunkify)
 
 
 @cli.command()
 @click.option("-n", "--address", required=True, help=PATH_HELP)
 @click.option("-d", "--show-display", is_flag=True)
-@with_client
-def get_public_key(client: "TrezorClient", address: str, show_display: bool) -> str:
+@with_session
+def get_public_key(session: "Session", address: str, show_display: bool) -> str:
     """Get Tezos public key."""
     address_n = tools.parse_path(address)
-    return tezos.get_public_key(client, address_n, show_display)
+    return tezos.get_public_key(session, address_n, show_display)
 
 
 @cli.command()
 @click.argument("file", type=click.File("r"))
 @click.option("-n", "--address", required=True, help=PATH_HELP)
 @click.option("-f", "--file", "_ignore", is_flag=True, hidden=True, expose_value=False)
-@with_client
+@click.option("-C", "--chunkify", is_flag=True)
+@with_session
 def sign_tx(
-    client: "TrezorClient", address: str, file: TextIO
+    session: "Session", address: str, file: TextIO, chunkify: bool
 ) -> messages.TezosSignedTx:
     """Sign Tezos transaction."""
     address_n = tools.parse_path(address)
     msg = protobuf.dict_to_proto(messages.TezosSignTx, json.load(file))
-    return tezos.sign_tx(client, address_n, msg)
+    return tezos.sign_tx(session, address_n, msg, chunkify=chunkify)

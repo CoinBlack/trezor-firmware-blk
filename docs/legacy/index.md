@@ -8,7 +8,7 @@ Ensure that you have Docker installed. You can follow [Docker's installation ins
 
 Clone this repository, then use `build-docker.sh` to build all images:
 ```sh
-git clone https://github.com/trezor/trezor-firmware.git
+git clone --recurse-submodules https://github.com/trezor/trezor-firmware.git
 cd trezor-firmware
 ./build-docker.sh
 ```
@@ -38,11 +38,11 @@ For firmwares older than 1.8.1, please clone the archived [trezor-mcu](https://g
 
 ## Local development build
 
-Make sure you have Python 3.6 or later and [Poetry](https://python-poetry.org/)
+Make sure you have Python 3.9 or later and [uv](https://docs.astral.sh/uv/)
 installed.
 
 If you want to build device firmware, also make sure that you have the [GNU ARM Embedded toolchain](https://developer.arm.com/open-source/gnu-toolchain/gnu-rm/downloads) installed.
-See [Dockerfile](../../ci/Dockerfile#L72-L76) for up-to-date version of the toolchain.
+See [Dockerfile](https://github.com/trezor/trezor-firmware/blob/master/ci/Dockerfile) for up-to-date version of the toolchain.
 
 The build process is configured via environment variables:
 
@@ -57,18 +57,24 @@ To run the build process, execute the following commands:
 ```sh
 # enter the legacy subdirectory
 cd legacy
-# set up poetry
-poetry install
+# set up uv
+uv sync
 # set up environment variables. For example, to build emulator with debuglink:
 export EMULATOR=1 DEBUG_LINK=1
 # clear build artifacts
-poetry run ./script/setup
+uv run ./script/setup
 # run build process
-poetry run ./script/cibuild
+uv run ./script/cibuild
 ```
 
 A built device firmware will be located in `legacy/firmware/trezor.bin`. A built emulator will be
 located in `legacy/firmware/trezor.elf`.
+
+### ⚠️ Disclaimer ⚠️
+
+The emulator is for *development purposes only*. It uses a pseudo random number generator, and thus no guarantee on its entropy is made. No security or hardening efforts are made here. It is, and will continue to be, intended for development purposes only. Security and hardening efforts are only made available on [physical Trezor hardware](https://shop.trezor.io/).
+
+Any other usage of the emulator is discouraged. Doing so runs the risk of losing funds.
 
 ### Common errors
 
@@ -92,7 +98,7 @@ You can use `TREZOR_OLED_SCALE` environment variable to make emulator screen big
 2. Download it: `wget -O trezor.signed.bin https://data.trezor.io/firmware/1/trezor-1.9.4.bin`
 3. Use `trezorctl` dry-run mode to get the firmware fingerprint:
    ```sh
-   trezorctl firmware-update -n -f trezor.signed.bin
+   trezorctl firmware update -n -f trezor.signed.bin
    ```
 
 Step 3 should produce the same fingerprint like your local build (for the same version tag).
@@ -105,10 +111,13 @@ Build with `PRODUCTION=0` or you will get a hard fault on your device.
 
 Switch your device to bootloader mode, then execute:
 ```sh
-trezorctl firmware-update -f build/legacy/firmware/firmware.bin
+trezorctl firmware update -f build/legacy/firmware/firmware.bin
 ```
 
 ## Combining bootloader and firmware with various `PRODUCTION` settings, signed/unsigned
+
+This is an issue before firmware 1.11.2, historical versions need to be built according
+to this table.
 
 Not all combinations of bootloader and firmware will work. This depends on
 3 variables: PRODUCTION of bootloader, PRODUCTION of firmware, whether firmware is signed
@@ -118,10 +127,17 @@ This table shows the result for bootloader 1.8.0+ and 1.9.1+:
 | Bootloader PRODUCTION | Firmware PRODUCTION | Is firmware officially signed? | Result                                                                                     |
 | ------------------------- | ----------------------- | ------------------------------ | ------------------------------------------------------------------------------------------ |
 |  1                        |  1                      | yes                            | works, official configuration                                                              |
-|  1                        |  1                      | no                             | hardfault in header.S when setting VTOR and stack                                          |
+|  1                        |  1                      | no                             | hardfault in startup.S when setting VTOR and stack                                          |
 |  0                        |  1                      | no                             | works, but don't forget to comment out `check_and_replace_bootloader`, otherwise it'll get overwritten |
-|  0                        |  0                      | no                             | hard fault because header.S doesn't set VTOR and stack right                               |
+|  0                        |  0                      | no                             | hard fault because startup.S doesn't set VTOR and stack right                               |
 |  1                        |  0                      | no                             | works                                                                                      |
 
 The other three possibilities with signed firmware and `PRODUCTION!=0` for bootloader/firmware don't exist.
+
+## Parsing existing T1 binary images with ImHex
+
+There is multi-platform hex editor [ImHex](https://github.com/WerWolv/ImHex) ([another link](https://imhex.werwolv.net/))
+that allows for parsing firmware images we distribute such as those from https://github.com/trezor/data/tree/master/firmware
+
+See `legacy/imhex/` directory in repo and `README.md` there how to use it to parse headers from existing images.
 

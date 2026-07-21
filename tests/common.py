@@ -14,19 +14,31 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
+from __future__ import annotations
+
 import json
+import re
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Generator, List, Optional
+from typing import TYPE_CHECKING, Any, Generator, Optional
+from unittest import mock
 
 import pytest
 
-from trezorlib import btc, tools
-from trezorlib.messages import ButtonRequestType
+from trezorlib import btc, messages, models, tools
+from trezorlib.debuglink import LayoutType
+from trezorlib.debuglink import TrezorTestContext as Client
 
 if TYPE_CHECKING:
-    from trezorlib.debuglink import DebugLink, TrezorClientDebugLink as Client
-    from trezorlib.messages import ButtonRequest
     from _pytest.mark.structures import MarkDecorator
+
+    from trezorlib.client import Session
+    from trezorlib.debuglink import DebugLink
+    from trezorlib.messages import ButtonRequest
+
+PRIVATE_KEYS_DEV = [byte * 32 for byte in (b"\xdd", b"\xde", b"\xdf")]
+
+BRGeneratorType = Generator[None, messages.ButtonRequest, None]
 
 
 # fmt: off
@@ -38,6 +50,11 @@ MNEMONIC_SLIP39_BASIC_20_3of6 = [
     "extra extend academic arcade born dive legal hush gross briefing talent drug much home firefly toxic analysis idea umbrella slice",
 ]
 MNEMONIC_SLIP39_BASIC_20_3of6_SECRET = "491b795b80fc21ccdf466c0fbc98c8fc"
+MNEMONIC_SLIP39_BASIC_EXT_20_2of3 = [
+    "enemy favorite academic acid cowboy phrase havoc level response walnut budget painting inside trash adjust froth kitchen learn tidy punish",
+    "enemy favorite academic always academic sniff script carpet romp kind promise scatter center unfair training emphasis evening belong fake enforce",
+]
+MNEMONIC_SLIP39_BASIC_EXT_20_2of3_SECRET = "644c905b0c4da21692f06fff3ed8b3e1"
 # Shamir shares (128 bits, 2 groups from 1 of 1, 1 of 1, 3 of 5, 2 of 6)
 MNEMONIC_SLIP39_ADVANCED_20 = [
     "eraser senior beard romp adorn nuclear spill corner cradle style ancient family general leader ambition exchange unusual garlic promise voice",
@@ -50,6 +67,11 @@ MNEMONIC_SLIP39_ADVANCED_33 = [
     "wildlife deal beard romp alcohol space mild usual clothes union nuclear testify course research heat listen task location thank hospital slice smell failure fawn helpful priest ambition average recover lecture process dough stadium",
     "wildlife deal acrobat romp anxiety axis starting require metric flexible geology game drove editor edge screw helpful have huge holy making pitch unknown carve holiday numb glasses survive already tenant adapt goat fangs",
 ]
+MNEMONIC_SLIP39_CUSTOM_1of1 = ["tolerate flexible academic academic average dwarf square home promise aspect temple cluster roster forward hand unfair tenant emperor ceramic element forget perfect knit adapt review usual formal receiver typical pleasure duke yield party"]
+MNEMONIC_SLIP39_CUSTOM_SECRET = "3439316237393562383066633231636364663436366330666263393863386663"
+
+MNEMONIC_SLIP39_SINGLE_EXT_20 = ["academic again academic academic academic academic academic academic academic academic academic academic academic academic academic academic academic pecan provide remember"]
+
 # External entropy mocked as received from trezorlib.
 EXTERNAL_ENTROPY = b"zlutoucky kun upel divoke ody" * 2
 # fmt: on
@@ -58,6 +80,9 @@ TEST_ADDRESS_N = tools.parse_path("m/44h/1h/0h/0/0")
 COMMON_FIXTURES_DIR = (
     Path(__file__).resolve().parent.parent / "common" / "tests" / "fixtures"
 )
+
+# So that all the random things are consistent
+MOCK_GET_ENTROPY = mock.Mock(return_value=EXTERNAL_ENTROPY)
 
 
 def parametrize_using_common_fixtures(*paths: str) -> "MarkDecorator":
@@ -74,14 +99,40 @@ def parametrize_using_common_fixtures(*paths: str) -> "MarkDecorator":
                 if test_id is not None:
                     test_id = test_id.lower().replace(" ", "_")
 
+            skip_models = test.get("skip_models", [])
+            skiplist = []
+            # TODO: genericify this
+            for skip_model in skip_models:
+                if skip_model in ("t1", "t1b1"):
+                    skiplist.append(models.T1B1)
+                if skip_model in ("t2", "t2t1"):
+                    skiplist.append(models.T2T1)
+                if skip_model in ("tr", "t2b1"):
+                    skiplist.append(models.T2B1)
+                    skiplist.append(models.T3B1)
+                if skip_model == "t3t1":
+                    skiplist.append(models.T3T1)
+                if skip_model == "t3w1":
+                    skiplist.append(models.T3W1)
+            if skiplist:
+                extra_marks = [pytest.mark.models(skip=skiplist)]
+            else:
+                extra_marks = []
+
+            if test.get("experimental"):
+                extra_marks.append(pytest.mark.experimental)
+
             tests.append(
                 pytest.param(
                     test["parameters"],
                     test["result"],
-                    marks=pytest.mark.setup_client(
-                        passphrase=fixture["setup"]["passphrase"],
-                        mnemonic=fixture["setup"]["mnemonic"],
-                    ),
+                    marks=[
+                        pytest.mark.setup_client(
+                            passphrase=fixture["setup"]["passphrase"],
+                            mnemonic=fixture["setup"]["mnemonic"],
+                        )
+                    ]
+                    + extra_marks,
                     id=test_id,
                 )
             )
@@ -122,64 +173,8 @@ def generate_entropy(
     return entropy_stripped
 
 
-def recovery_enter_shares(
-    debug: "DebugLink",
-    shares: List[str],
-    groups: bool = False,
-    click_info: bool = False,
-) -> Generator[None, "ButtonRequest", None]:
-    """Perform the recovery flow for a set of Shamir shares.
-
-    For use in an input flow function.
-    Example:
-
-    def input_flow():
-        yield  # start recovery
-        client.debug.press_yes()
-        yield from recovery_enter_shares(client.debug, SOME_SHARES)
-    """
-    word_count = len(shares[0].split(" "))
-
-    # Homescreen - proceed to word number selection
-    yield
-    debug.press_yes()
-    # Input word number
-    br = yield
-    assert br.code == ButtonRequestType.MnemonicWordCount
-    debug.input(str(word_count))
-    # Homescreen - proceed to share entry
-    yield
-    debug.press_yes()
-    # Enter shares
-    for share in shares:
-        br = yield
-        assert br.code == ButtonRequestType.MnemonicInput
-        # Enter mnemonic words
-        for word in share.split(" "):
-            debug.input(word)
-
-        if groups:
-            # Confirm share entered
-            yield
-            debug.press_yes()
-
-        # Homescreen - continue
-        # or Homescreen - confirm success
-        yield
-
-        if click_info:
-            # Moving through the INFO button
-            debug.press_info()
-            yield
-            debug.swipe_up()
-            debug.press_yes()
-
-        # Finishing with current share
-        debug.press_yes()
-
-
 def click_through(
-    debug: "DebugLink", screens: int, code: ButtonRequestType = None
+    debug: "DebugLink", screens: int, code: Optional[messages.ButtonRequestType] = None
 ) -> Generator[None, "ButtonRequest", None]:
     """Click through N dialog screens.
 
@@ -203,8 +198,9 @@ def click_through(
 def read_and_confirm_mnemonic(
     debug: "DebugLink", choose_wrong: bool = False
 ) -> Generator[None, "ButtonRequest", Optional[str]]:
-    """Read a given number of mnemonic words from Trezor T screen and correctly
-    answer confirmation questions. Return the full mnemonic.
+    """Read mnemonic words from the screen and answer
+    confirmation questions.
+    Return the full mnemonic or None if `choose_wrong` is True.
 
     For use in an input flow function.
     Example:
@@ -214,30 +210,220 @@ def read_and_confirm_mnemonic(
 
         mnemonic = yield from read_and_confirm_mnemonic(client.debug)
     """
-    mnemonic = []
-    br = yield
-    assert br.pages is not None
-    for _ in range(br.pages - 1):
-        mnemonic.extend(debug.read_reset_word().split())
-        debug.swipe_up(wait=True)
+    if debug.layout_type is LayoutType.Bolt:
+        mnemonic = yield from read_mnemonic_from_screen_bolt(debug)
+    elif debug.layout_type is LayoutType.Caesar:
+        mnemonic = yield from read_mnemonic_from_screen_caesar(debug)
+    elif debug.layout_type is LayoutType.Delizia:
+        mnemonic = yield from read_mnemonic_from_screen_delizia(debug)
+    elif debug.layout_type is LayoutType.Eckhart:
+        mnemonic = yield from read_mnemonic_from_screen_eckhart(debug)
+    else:
+        raise ValueError(f"Unknown model: {debug.layout_type}")
 
-    # last page is confirmation
-    mnemonic.extend(debug.read_reset_word().split())
-    debug.press_yes()
-
-    # check share
-    for _ in range(3):
-        index = debug.read_reset_word_pos()
-        if choose_wrong:
-            debug.input(mnemonic[(index + 1) % len(mnemonic)])
-            return None
-        else:
-            debug.input(mnemonic[index])
-
+    if not check_share(debug, mnemonic, choose_wrong):
+        return None
     return " ".join(mnemonic)
 
 
-def get_test_address(client: "Client") -> str:
+def read_mnemonic_from_screen_bolt(
+    debug: "DebugLink",
+) -> Generator[None, "ButtonRequest", list[str]]:
+    mnemonic: list[str] = []
+    br = yield
+    assert br.pages is not None
+
+    for i in range(br.pages):
+        words = debug.read_layout().seed_words()
+        mnemonic.extend(words)
+        # Not swiping on the last page
+        if i < br.pages - 1:
+            debug.swipe_up()
+
+    debug.press_yes()
+    return mnemonic
+
+
+def read_mnemonic_from_screen_caesar(
+    debug: "DebugLink",
+) -> Generator[None, "ButtonRequest", list[str]]:
+    mnemonic: list[str] = []
+    yield  # write down all 12 words in order
+    debug.press_yes()
+    br = yield
+    assert br.pages is not None
+    for _ in range(br.pages - 1):
+        layout = debug.read_layout()
+        words = layout.seed_words()
+        mnemonic.extend(words)
+        debug.press_right()
+    debug.press_yes()
+
+    yield  # Select correct words...
+    debug.press_right()
+    return mnemonic
+
+
+def read_mnemonic_from_screen_delizia(
+    debug: "DebugLink",
+) -> Generator[None, "ButtonRequest", list[str]]:
+    mnemonic: list[str] = []
+    br = yield
+    assert br.pages is not None
+
+    debug.read_layout()
+    debug.swipe_up()
+
+    for _ in range(br.pages - 2):
+        words = debug.read_layout().seed_words()
+        mnemonic.extend(words)
+        debug.swipe_up()
+
+    debug.read_layout()
+    debug.press_yes()
+
+    return mnemonic
+
+
+def read_mnemonic_from_screen_eckhart(
+    debug: "DebugLink",
+) -> Generator[None, "ButtonRequest", list[str]]:
+    mnemonic: list[str] = []
+    br = yield
+    assert br.pages is not None
+
+    # There is an intro screen
+    if br.pages != debug.read_layout().page_count() + 1:
+        debug.click(debug.screen_buttons.ok())
+
+    nwords = debug.read_layout().page_count()
+    assert nwords > 1
+
+    for _ in range(nwords):
+        words = debug.read_layout().seed_words()
+        mnemonic.extend(words)
+        debug.click(debug.screen_buttons.ok())
+
+    debug.press_yes()
+    return mnemonic
+
+
+def check_share(
+    debug: "DebugLink", mnemonic: list[str], choose_wrong: bool = False
+) -> bool:
+    """
+    Given the mnemonic word list, proceed with the backup check:
+    three rounds of `Select word X of Y` choices.
+    """
+    re_num_of_word = r"\d+"
+    for _ in range(3):
+        if debug.layout_type is LayoutType.Bolt:
+            # T2T1 has position as the first number in the text
+            word_pos_match = re.search(
+                re_num_of_word, debug.read_layout().text_content()
+            )
+        elif debug.layout_type is LayoutType.Caesar:
+            # other models have the instruction in the title/subtitle
+            word_pos_match = re.search(re_num_of_word, debug.read_layout().title())
+        elif debug.layout_type in (LayoutType.Delizia, LayoutType.Eckhart):
+            word_pos_match = re.search(re_num_of_word, debug.read_layout().subtitle())
+        else:
+            word_pos_match = None
+
+        assert word_pos_match is not None
+        word_pos = int(word_pos_match.group(0))
+
+        index = word_pos - 1
+        if choose_wrong:
+            debug.input(mnemonic[(index + 1) % len(mnemonic)])
+            return False
+        else:
+            debug.input(mnemonic[index])
+
+    return True
+
+
+def click_info_button_bolt(debug: "DebugLink") -> Generator[Any, Any, ButtonRequest]:
+    """Click Shamir backup info button and return back."""
+    debug.press_info()
+    debug.press_yes()
+    return (yield)
+
+
+def click_info_button_delizia_eckhart(debug: "DebugLink"):
+    """Click Shamir backup info button, scroll through it and return back."""
+    debug.click(debug.screen_buttons.menu())
+    layout = debug.read_layout()
+    assert "VerticalMenu" in layout.all_components()
+    # Click on the first item in the vertical menu
+    debug.button_actions.navigate_to_menu_item(0)
+
+    layout = debug.read_layout()
+
+    # Go through the info screen pages
+    for _ in range(layout.page_count() - 1):
+        if debug.layout_type is LayoutType.Delizia:
+            debug.swipe_up()
+        elif debug.layout_type is LayoutType.Eckhart:
+            debug.click(debug.screen_buttons.ok())
+
+    # Close info screen
+    debug.click(debug.screen_buttons.menu())
+    # Close menu
+    debug.click(debug.screen_buttons.menu())
+
+
+def check_pin_backoff_time(attempts: int, start: float) -> None:
+    """Helper to assert the exponentially growing delay after incorrect PIN attempts"""
+    expected = (2**attempts) - 1
+    got = round(time.time() - start, 2)
+    assert got >= expected
+
+
+def get_test_address(session: "Session") -> str:
     """Fetch a testnet address on a fixed path. Useful to make a pin/passphrase
     protected call, or to identify the root secret (seed+passphrase)"""
-    return btc.get_address(client, "Testnet", TEST_ADDRESS_N)
+    return btc.get_address(session, "Testnet", TEST_ADDRESS_N)
+
+
+def compact_size(n: int) -> bytes:
+    if n < 253:
+        return n.to_bytes(1, "little")
+    elif n < 0x1_0000:
+        return bytes([253]) + n.to_bytes(2, "little")
+    elif n < 0x1_0000_0000:
+        return bytes([254]) + n.to_bytes(4, "little")
+    else:
+        return bytes([255]) + n.to_bytes(8, "little")
+
+
+def get_text_possible_pagination(debug: "DebugLink", br: messages.ButtonRequest) -> str:
+    text = debug.read_layout().text_content()
+    if br.pages is not None:
+        for _ in range(br.pages - 1):
+            if debug.layout_type is LayoutType.Eckhart:
+                debug.click(debug.screen_buttons.ok())
+            else:
+                debug.swipe_up()
+            text += " "
+            text += debug.read_layout().text_content()
+    return text
+
+
+def swipe_if_necessary(
+    debug: "DebugLink", br_code: messages.ButtonRequestType | None = None
+) -> BRGeneratorType:
+    br = yield
+    if br_code is not None:
+        assert br.code == br_code
+    swipe_till_the_end(debug, br)
+
+
+def swipe_till_the_end(debug: "DebugLink", br: messages.ButtonRequest) -> None:
+    if br.pages is not None:
+        for _ in range(br.pages - 1):
+            debug.swipe_up()
+
+
+def is_core(session: Client | Session) -> bool:
+    return session.model is not models.T1B1

@@ -2,27 +2,26 @@
 
 ## 1. Running the full test suite
 
-_Note: You need Poetry, as mentioned in the core's [documentation](https://docs.trezor.io/trezor-firmware/core/) section._
+_Note: You need Uv, as mentioned in the core's [documentation](https://docs.trezor.io/trezor-firmware/core/) section._
 
 In the `trezor-firmware` checkout, in the root of the monorepo, install the environment:
 
 ```sh
-poetry install
+uv sync
 ```
 
 And run the tests:
 
 ```sh
-poetry run make -C core test_emu_ui
+uv run make -C core test_emu_ui
 ```
 
 ## 2. Running tests manually
 
-Install the poetry environment as outlined above. Then switch to a shell inside the
-environment:
+Install the `uv` environment as outlined above. Then activate the environment:
 
 ```sh
-poetry shell
+source .venv/bin/activate
 ```
 
 If you want to test against the emulator, run it with disabled animation in a separate terminal:
@@ -45,7 +44,7 @@ pytest tests/device_tests --ui=test --ui-check-missing
 
 Short version:
 ```sh
-poetry run make -C core test_emu_ui_record
+uv run make -C core test_emu_ui_record
 ```
 
 Long version:
@@ -73,12 +72,12 @@ pytest tests/device_tests --ui=record --ui-check-missing
 ### Tests
 
 Each `--ui=test` creates a clear report which tests passed and which failed.
-The index file is stored in `tests/ui_tests/reporting/reports/test/index.html`.
+The index file is stored in `tests/ui_tests/reports/test/index.html`.
 The script `tests/show_results.py` starts a local HTTP server that serves this page --
 this is necessary for access to browser local storage, which enables a simple reviewer
 UI.
 
-On CI this report is published as an artifact. You can see the latest master report [here](https://gitlab.com/satoshilabs/trezor/trezor-firmware/-/jobs/artifacts/master/file/test_ui_report/index.html?job=core%20device%20ui%20test). The reviewer features work directly here.
+On CI this report is published as an artifact.
 
 If needed, you can use `python3 -m tests.ui_tests` to regenerate the report from local
 recorded screens.

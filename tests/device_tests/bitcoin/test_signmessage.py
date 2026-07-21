@@ -14,21 +14,38 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
+from typing import Any
 
 import pytest
 
 from trezorlib import btc, messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client, message_filters
+from trezorlib.debuglink import DebugSession as Session
+from trezorlib.debuglink import LayoutType, message_filters
+from trezorlib.exceptions import Cancelled
 from trezorlib.tools import parse_path
+
+from ...common import is_core
+from ...input_flows import (
+    InputFlowConfirmAllWarnings,
+    InputFlowSignMessageInfo,
+    InputFlowSignMessagePagination,
+    InputFlowSignVerifyMessageLong,
+)
 
 S = messages.InputScriptType
 
 
-def case(id, *args, altcoin=False):
+def case(
+    id: str,
+    *args: Any,
+    models: str | None = None,
+    altcoin: bool = False,
+):
+    marks = []
     if altcoin:
-        marks = pytest.mark.altcoin
-    else:
-        marks = ()
+        marks.append(pytest.mark.altcoin)
+    if models:
+        marks.append(pytest.mark.models(models))
     return pytest.param(*args, id=id, marks=marks)
 
 
@@ -98,37 +115,6 @@ VECTORS = (  # case name, coin_name, path, script_type, address, message, signat
         "This is an example of a signed message.",
         "20b55d7600d9e9a7e2a49155ddf3cfdb8e796c207faab833010fa41fb7828889bc47cf62348a7aaa0923c0832a589fab541e8f12eb54fb711c90e2307f0f66b194",
     ),
-    # ==== Bitcoin with long message ====
-    case(
-        "p2pkh long message",
-        "Bitcoin",
-        "m/44h/0h/0h/0/0",
-        S.SPENDADDRESS,
-        False,
-        "1JAd7XCBzGudGpJQSDSfpmJhiygtLQWaGL",
-        "VeryLongMessage!" * 64,
-        "200a46476ceb84d06ef5784828026f922c8815f57aac837b8c013007ca8a8460db63ef917dbebaebd108b1c814bbeea6db1f2b2241a958e53fe715cc86b199d9c3",
-    ),
-    case(
-        "segwit-p2sh long message",
-        "Bitcoin",
-        "m/49h/0h/0h/0/0",
-        S.SPENDP2SHWITNESS,
-        False,
-        "3L6TyTisPBmrDAj6RoKmDzNnj4eQi54gD2",
-        "VeryLongMessage!" * 64,
-        "236eadee380684f70749c52141c8aa7c3b6afd84d0e5f38cfa71823f3b1105a5f34e23834a5bb6f239ff28ad87f409f44e4ce6269754adc00388b19507a5d9386f",
-    ),
-    case(
-        "segwit-native long message",
-        "Bitcoin",
-        "m/84h/0h/0h/0/0",
-        S.SPENDWITNESS,
-        False,
-        "bc1qannfxke2tfd4l7vhepehpvt05y83v3qsf6nfkk",
-        "VeryLongMessage!" * 64,
-        "28c6f86e255eaa768c447d635d91da01631ac54af223c2c182d4fa3676cfecae4a199ad33a74fe04fb46c39432acb8d83de74da90f5f01123b3b7d8bc252bc7f71",
-    ),
     # ==== NFKD vs NFC message - signatures must be identical ====
     case(
         "NFKD message",
@@ -149,6 +135,18 @@ VECTORS = (  # case name, coin_name, path, script_type, address, message, signat
         "1GWFxtwWmNVqotUPXLcKVL2mUKpshuJYo",
         MESSAGE_NFC,
         NFKD_NFC_SIGNATURE,
+    ),
+    # ==== T1 FW signing ====
+    case(
+        "t1 firmware path",
+        "Bitcoin",
+        "m/10026'/826421588'/2'/0'",
+        S.SPENDADDRESS,
+        False,
+        "1FoHjQT6bAEu2FQGzTgqj4PBneoiCAk4ZN",
+        b"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "1f40ae58dd68480a2f39eecf4decfe79ceacde3f865502db67c083b8465b33535c0750d5377b7ac62e534f71c922cd029f659761f8ac99e859df36322c5b320eff",
+        models="core",
     ),
     # ==== Testnet script types ====
     case(
@@ -236,6 +234,7 @@ VECTORS = (  # case name, coin_name, path, script_type, address, message, signat
         "This is an example of a signed message.",
         "206b1f8ba47ef9eaf87aa900e41ab1e97f67e8c09292faa4acf825228d074c4b774484046dcb1d9bbf0603045dbfb328c3e1b0c09c5ae133e89e604a67a1fc6cca",
         altcoin=True,
+        models="t1b1,t2t1",
     ),
     case(
         "decred-empty",
@@ -247,6 +246,42 @@ VECTORS = (  # case name, coin_name, path, script_type, address, message, signat
         "",
         "1fd2d57490b44a0361c7809768cad032d41ba1d4b7a297f935fc65ae05f71de7ea0c6c6fd265cc5154f1fa4acd7006b6a00ddd67fb7333c1594aff9120b3ba8024",
         altcoin=True,
+        models="t1b1,t2t1",
+    ),
+)
+
+
+VECTORS_LONG_MESSAGE = (
+    # ==== Bitcoin with long message ====
+    case(
+        "p2pkh long message",
+        "Bitcoin",
+        "m/44h/0h/0h/0/0",
+        S.SPENDADDRESS,
+        False,
+        "1JAd7XCBzGudGpJQSDSfpmJhiygtLQWaGL",
+        "VeryLongMessage!" * 64,
+        "200a46476ceb84d06ef5784828026f922c8815f57aac837b8c013007ca8a8460db63ef917dbebaebd108b1c814bbeea6db1f2b2241a958e53fe715cc86b199d9c3",
+    ),
+    case(
+        "segwit-p2sh long message",
+        "Bitcoin",
+        "m/49h/0h/0h/0/0",
+        S.SPENDP2SHWITNESS,
+        False,
+        "3L6TyTisPBmrDAj6RoKmDzNnj4eQi54gD2",
+        "VeryLongMessage!" * 64,
+        "236eadee380684f70749c52141c8aa7c3b6afd84d0e5f38cfa71823f3b1105a5f34e23834a5bb6f239ff28ad87f409f44e4ce6269754adc00388b19507a5d9386f",
+    ),
+    case(
+        "segwit-native long message",
+        "Bitcoin",
+        "m/84h/0h/0h/0/0",
+        S.SPENDWITNESS,
+        False,
+        "bc1qannfxke2tfd4l7vhepehpvt05y83v3qsf6nfkk",
+        "VeryLongMessage!" * 64,
+        "28c6f86e255eaa768c447d635d91da01631ac54af223c2c182d4fa3676cfecae4a199ad33a74fe04fb46c39432acb8d83de74da90f5f01123b3b7d8bc252bc7f71",
     ),
 )
 
@@ -255,10 +290,17 @@ VECTORS = (  # case name, coin_name, path, script_type, address, message, signat
     "coin_name, path, script_type, no_script_type, address, message, signature", VECTORS
 )
 def test_signmessage(
-    client, coin_name, path, script_type, no_script_type, address, message, signature
+    session: Session,
+    coin_name: str,
+    path: str,
+    script_type: messages.InputScriptType,
+    no_script_type: bool,
+    address: str,
+    message: str,
+    signature: str,
 ):
     sig = btc.sign_message(
-        client,
+        session,
         coin_name=coin_name,
         n=parse_path(path),
         script_type=script_type,
@@ -269,93 +311,167 @@ def test_signmessage(
     assert sig.signature.hex() == signature
 
 
+@pytest.mark.models("core")
+@pytest.mark.parametrize(
+    "coin_name, path, script_type, no_script_type, address, message, signature",
+    VECTORS_LONG_MESSAGE,
+)
+def test_signmessage_long(
+    session: Session,
+    coin_name: str,
+    path: str,
+    script_type: messages.InputScriptType,
+    no_script_type: bool,
+    address: str,
+    message: str,
+    signature: str,
+):
+    with session.test_ctx as client:
+        IF = InputFlowSignVerifyMessageLong(session)
+        client.set_input_flow(IF.get())
+        sig = btc.sign_message(
+            session,
+            coin_name=coin_name,
+            n=parse_path(path),
+            script_type=script_type,
+            no_script_type=no_script_type,
+            message=message,
+        )
+        assert sig.address == address
+        assert sig.signature.hex() == signature
+
+
+@pytest.mark.models("core", skip=["safe3"], reason="Not implemented")
+@pytest.mark.parametrize(
+    "coin_name, path, script_type, no_script_type, address, message, signature", VECTORS
+)
+def test_signmessage_info(
+    session: Session,
+    coin_name: str,
+    path: str,
+    script_type: messages.InputScriptType,
+    no_script_type: bool,
+    address: str,
+    message: str,
+    signature: str,
+):
+    with session.test_ctx as client, pytest.raises(Cancelled):
+        IF = InputFlowSignMessageInfo(session)
+        client.set_input_flow(IF.get())
+        sig = btc.sign_message(
+            session,
+            coin_name=coin_name,
+            n=parse_path(path),
+            script_type=script_type,
+            no_script_type=no_script_type,
+            message=message,
+            chunkify=True,
+        )
+        assert sig.address == address
+        assert sig.signature.hex() == signature
+
+
 MESSAGE_LENGTHS = (
-    pytest.param("This is a very long message. " * 16, id="normal_text"),
-    pytest.param("ThisIsAMessageWithoutSpaces" * 16, id="no_spaces"),
-    pytest.param("ThisIsAMessageWithLongWords " * 16, id="long_words"),
-    pytest.param("This\nmessage\nhas\nnewlines\nafter\nevery\nword", id="newlines"),
-    pytest.param("Příšerně žluťoučký kůň úpěl ďábelské ódy. " * 16, id="utf_text"),
-    pytest.param("PříšerněŽluťoučkýKůňÚpělĎábelskéÓdy" * 16, id="utf_nospace"),
-    pytest.param("1\n2\n3\n4\n5\n6", id="single_line_over"),
+    pytest.param("This is a very long message. " * 16, False, id="normal_text"),
+    pytest.param("ThisIsAMessageWithoutSpaces" * 16, False, id="no_spaces"),
+    pytest.param("ThisIsAMessageWithLongWords " * 16, False, id="long_words"),
+    pytest.param(
+        "This\nmessage\nhas\nnewlines\nafter\nevery\nsingle\nword", False, id="newlines"
+    ),
+    pytest.param(
+        "Příšerně žluťoučký kůň úpěl ďábelské ódy. " * 16, True, id="utf_text"
+    ),
+    pytest.param("PříšerněŽluťoučkýKůňÚpělĎábelskéÓdy" * 16, True, id="utf_nospace"),
+    pytest.param("1\n2\n3\n4\n5\n6\n7", False, id="single_line_over"),
+)
+
+MESSAGE_LENGTHS_ECKHART = (
+    pytest.param("This is a very long message. " * 27, False, id="normal_text"),
+    pytest.param("ThisIsAMessageWithoutSpaces" * 29, False, id="no_spaces"),
+    pytest.param("ThisIsAMessageWithLongWords " * 28, False, id="long_words"),
+    pytest.param(
+        "This\nmessage\nhas\nnewlines\nafter\nevery\nsingle\none\nword",
+        False,
+        id="newlines",
+    ),
+    pytest.param(
+        "Příšerně žluťoučký kůň úpěl ďábelské ódy. " * 19, True, id="utf_text"
+    ),
+    pytest.param("PříšerněŽluťoučkýKůňÚpělĎábelskéÓdy" * 23, True, id="utf_nospace"),
+    pytest.param("1\n2\n3\n4\n5\n6\n7\n8\n9", False, id="single_line_over"),
 )
 
 
-@pytest.mark.skip_t1
-@pytest.mark.parametrize("message", MESSAGE_LENGTHS)
-def test_signmessage_pagination(client: Client, message):
-    message_read = ""
+def _pagination_test(session: Session, message: str, is_long: bool):
 
-    def input_flow():
-        # collect screen contents into `message_read`.
-        # Join lines that are separated by a single "-" string, space-separate lines otherwise.
-        nonlocal message_read
-
-        # confirm address
-        br = yield
-        layout = client.debug.wait_layout()
-        client.debug.press_yes()
-
-        # start assuming there was a word break; this avoids prepending space at start
-        word_break = True
-        br = yield
-        for i in range(br.pages):
-            layout = client.debug.wait_layout()
-            for line in layout.lines[1:]:
-                if line == "-":
-                    # next line will be attached without space
-                    word_break = True
-                elif word_break:
-                    # attach without space, reset word_break
-                    message_read += line
-                    word_break = False
-                else:
-                    # attach with space
-                    message_read += " " + line
-
-            if i < br.pages - 1:
-                client.debug.swipe_up()
-
-        client.debug.press_yes()
-
-    with client:
-        client.set_input_flow(input_flow)
-        client.debug.watch_layout(True)
+    with session.test_ctx as client:
+        IF = (
+            InputFlowSignVerifyMessageLong
+            if is_long
+            else InputFlowSignMessagePagination
+        )(session)
+        client.set_input_flow(IF.get())
         btc.sign_message(
-            client,
+            session,
             coin_name="Bitcoin",
             n=parse_path("m/44h/0h/0h/0/0"),
             message=message,
         )
-    assert "Confirm message:   " + message.replace("\n", " ") == message_read
+
+    message_read = IF.message_read.replace(" ", "").replace("...", "")
+    signed_message = message.replace("\n", "").replace(" ", "")
+
+    if session.layout_type in (
+        LayoutType.Bolt,
+        LayoutType.Delizia,
+        LayoutType.Eckhart,
+    ):
+        assert signed_message in message_read
 
 
-@pytest.mark.skip_t1
-def test_signmessage_pagination_trailing_newline(client: Client):
-    message = "THIS\nMUST NOT\nBE\nPAGINATED\n"
+@pytest.mark.models(
+    "core",
+    skip=["eckhart"],
+    reason="Test with different parameters implemented for eckhart",
+)
+@pytest.mark.parametrize("message,is_long", MESSAGE_LENGTHS)
+def test_signmessage_pagination(session: Session, message: str, is_long: bool):
+    _pagination_test(session, message, is_long)
+
+
+@pytest.mark.models("eckhart")
+@pytest.mark.parametrize("message,is_long", MESSAGE_LENGTHS_ECKHART)
+def test_signmessage_pagination_eckhart(session: Session, message: str, is_long: bool):
+    _pagination_test(session, message, is_long)
+
+
+@pytest.mark.models("t2t1", reason="Tailored to TT fonts and screen size")
+def test_signmessage_pagination_trailing_newline(session: Session):
+    message = "THIS\nMUST\nNOT\nBE\nPAGINATED\n"
     # The trailing newline must not cause a new paginated screen to appear.
     # The UI must be a single dialog without pagination.
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 # expect address confirmation
                 message_filters.ButtonRequest(code=messages.ButtonRequestType.Other),
-                # expect a ButtonRequest that does not have pagination set
-                message_filters.ButtonRequest(pages=None),
+                # expect a ButtonRequest for a single-page screen
+                message_filters.ButtonRequest(pages=1),
                 messages.MessageSignature,
             ]
         )
         btc.sign_message(
-            client,
+            session,
             coin_name="Bitcoin",
             n=parse_path("m/44h/0h/0h/0/0"),
             message=message,
         )
 
 
-def test_signmessage_path_warning(client: Client):
+def test_signmessage_path_warning(session: Session):
     message = "This is an example of a signed message."
 
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 # expect a path warning
@@ -367,8 +483,11 @@ def test_signmessage_path_warning(client: Client):
                 messages.MessageSignature,
             ]
         )
+        if is_core(session):
+            IF = InputFlowConfirmAllWarnings(session)
+            client.set_input_flow(IF.get())
         btc.sign_message(
-            client,
+            session,
             coin_name="Bitcoin",
             n=parse_path("m/86h/0h/0h/0/0"),
             message=message,

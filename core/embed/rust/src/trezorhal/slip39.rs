@@ -1,4 +1,4 @@
-use cstr_core::CStr;
+use core::{ffi::CStr, str};
 
 use super::ffi;
 
@@ -25,6 +25,6 @@ pub fn button_sequence_to_word(prefix: u16) -> Option<&'static str> {
     } else {
         // SAFETY: On success, `button_sequence_to_word` should return a 0-terminated
         // UTF-8 string with static lifetime.
-        Some(unsafe { CStr::from_ptr(word).to_str().unwrap_unchecked() })
+        Some(unsafe { str::from_utf8_unchecked(CStr::from_ptr(word as _).to_bytes()) })
     }
 }

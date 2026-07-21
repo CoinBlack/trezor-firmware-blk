@@ -1,7 +1,10 @@
 # Build instructions for Emulator (Unix port)
 
-First clone, initialize submodules, install Poetry and enter the Poetry shell as
-defined [here](index.md). **Do not forget you need to be in a `poetry shell`
+> **Hint**:
+Using emulator as described here is useful during firmware development. If you intend to use the emulator without modifying the firmware, you might be looking for [Trezor User Env](https://github.com/trezor/trezor-user-env/tree/master).
+
+First clone, initialize submodules, install `uv` and enter the `uv` shell as
+defined [here](index.md). **Do not forget you need to be in a `uv` shell
 environment!**
 
 ## Dependencies
@@ -52,14 +55,18 @@ brew install scons sdl2 sdl2_image pkg-config llvm
 
 * __Windows__: not supported yet, sorry.
 
+## Protobuf Compiler
+
+The protocol buffer compiler `protoc` is needed to (unsurprisingly) compile protocol buffer files. [Follow the installation instructions for your system](https://grpc.io/docs/protoc-installation/).
+
 ## Rust
 
-You will require Rust and Cargo. The currently supported version is 1.58 stable.
-The recommended way to install both is with [`rustup`](https://rustup.rs/). If you
-are installing `rustup` for the first time, the stable toolchain will be installed
-for you automatically. Otherwise, make sure you are up to date:
+You will require Rust and Cargo. The currently supported version is 1.88 nightly. The
+recommended way to install both is with [`rustup`](https://rustup.rs/). Make sure you
+are up to date:
 
 ```sh
+rustup default nightly
 rustup update
 ```
 
@@ -71,7 +78,8 @@ requires libclang for generating MicroPython FFI.
 Run the build with:
 
 ```sh
-make build_unix
+make build_unix                     # default
+make build_unix TREZOR_MODEL=T2B1   # different model
 ```
 
 ## Run
@@ -92,5 +100,5 @@ Beware that this will significantly bloat the final binary
 and the firmware runtime memory limit HEAPSIZE may have to be increased.
 
 ```sh
-DEBUG_BUILD=1 make build_unix
+make build_unix_debug
 ```

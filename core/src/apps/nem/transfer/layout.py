@@ -1,51 +1,66 @@
 from typing import TYPE_CHECKING
 
-from trezor import ui
-from trezor.enums import ButtonRequestType, NEMImportanceTransferMode, NEMMosaicLevy
-from trezor.messages import (
-    NEMImportanceTransfer,
-    NEMMosaic,
-    NEMTransactionCommon,
-    NEMTransfer,
-)
-from trezor.strings import format_amount
-from trezor.ui.layouts import (
-    confirm_action,
-    confirm_output,
-    confirm_properties,
-    confirm_text,
-)
+from trezor import TR
+from trezor.enums import ButtonRequestType
+from trezor.strings import format_amount, format_amount_unit
 
-from ..helpers import (
-    NEM_LEVY_PERCENTILE_DIVISOR_ABSOLUTE,
-    NEM_MAX_DIVISIBILITY,
-    NEM_MOSAIC_AMOUNT_DIVISOR,
-)
-from ..layout import require_confirm_final, require_confirm_text
-from ..mosaic.helpers import get_mosaic_definition, is_nem_xem_mosaic
+from ..helpers import NEM_MOSAIC_AMOUNT_DIVISOR
+from ..layout import require_confirm_final
+from ..mosaic.helpers import is_nem_xem_mosaic
 
 if TYPE_CHECKING:
-    from trezor.wire import Context
-    from ..mosaic.nem_mosaics import MosaicLevy
+    from trezor.messages import (
+        NEMImportanceTransfer,
+        NEMMosaic,
+        NEMTransactionCommon,
+        NEMTransfer,
+    )
 
 
 async def ask_transfer(
-    ctx: Context,
     common: NEMTransactionCommon,
     transfer: NEMTransfer,
     encrypted: bool,
+    chunkify: bool,
 ) -> None:
+    from trezor.ui.layouts import confirm_output, confirm_text
+
+    from ..helpers import NEM_MAX_DIVISIBILITY
+
     if transfer.payload:
-        await _require_confirm_payload(ctx, transfer.payload, encrypted)
+        # require_confirm_payload
+        await confirm_text(
+            "confirm_payload",
+            TR.nem__confirm_payload,
+            bytes(transfer.payload).decode(),
+            TR.nem__encrypted if encrypted else TR.nem__unencrypted,
+            ButtonRequestType.ConfirmOutput,
+        )
+
     for mosaic in transfer.mosaics:
-        await ask_transfer_mosaic(ctx, common, transfer, mosaic)
-    await _require_confirm_transfer(ctx, transfer.recipient, _get_xem_amount(transfer))
-    await require_confirm_final(ctx, common.fee)
+        await _ask_transfer_mosaic(common, transfer, mosaic)
+
+    # require_confirm_transfer
+    await confirm_output(
+        transfer.recipient,
+        format_amount_unit(
+            format_amount(_get_xem_amount(transfer), NEM_MAX_DIVISIBILITY), "XEM"
+        ),
+        chunkify=chunkify,
+    )
+
+    await require_confirm_final(common.fee)
 
 
-async def ask_transfer_mosaic(
-    ctx: Context, common: NEMTransactionCommon, transfer: NEMTransfer, mosaic: NEMMosaic
+async def _ask_transfer_mosaic(
+    common: NEMTransactionCommon, transfer: NEMTransfer, mosaic: NEMMosaic
 ) -> None:
+    from trezor.enums import NEMMosaicLevy
+    from trezor.ui.layouts import confirm_action, confirm_properties
+
+    from ..helpers import NEM_LEVY_PERCENTILE_DIVISOR_ABSOLUTE
+    from ..mosaic.helpers import get_mosaic_definition
+
     if is_nem_xem_mosaic(mosaic):
         return
 
@@ -54,54 +69,58 @@ async def ask_transfer_mosaic(
 
     if definition:
         await confirm_properties(
-            ctx,
             "confirm_mosaic",
-            title="Confirm mosaic",
-            props=[
+            TR.nem__confirm_mosaic,
+            (
                 (
-                    "Confirm transfer of",
+                    TR.nem__confirm_transfer_of,
                     format_amount(mosaic_quantity, definition.divisibility)
                     + definition.ticker,
+                    False,
                 ),
-                ("of", definition.name),
-            ],
+                (TR.nem__of, definition.name, False),
+            ),
         )
+        levy = definition.levy  # local_cache_attribute
 
-        if definition.levy is not None:
-            levy_fee = _get_levy_fee(definition.levy, mosaic_quantity)
+        if levy is not None:
+            if levy == NEMMosaicLevy.MosaicLevy_Absolute:
+                levy_fee = levy.fee
+            else:
+                levy_fee = (
+                    mosaic_quantity * levy.fee // NEM_LEVY_PERCENTILE_DIVISOR_ABSOLUTE
+                )
+
             levy_msg = (
                 format_amount(levy_fee, definition.divisibility) + definition.ticker
             )
 
             await confirm_properties(
-                ctx,
                 "confirm_mosaic_levy",
-                title="Confirm mosaic",
-                props=[
-                    ("Confirm mosaic\nlevy fee of", levy_msg),
-                ],
+                TR.nem__confirm_mosaic,
+                ((TR.nem__levy_fee_of, levy_msg, False),),
             )
 
     else:
         await confirm_action(
-            ctx,
             "confirm_mosaic_unknown",
-            title="Confirm mosaic",
-            action="Unknown mosaic!",
-            description="Divisibility and levy cannot be shown for unknown mosaics",
-            icon=ui.ICON_SEND,
-            icon_color=ui.RED,
+            TR.nem__confirm_mosaic,
+            TR.nem__unknown_mosaic,
+            TR.nem__divisibility_and_levy_cannot_be_shown,
             br_code=ButtonRequestType.ConfirmOutput,
         )
 
         await confirm_properties(
-            ctx,
             "confirm_mosaic_transfer",
-            title="Confirm mosaic",
-            props=[
-                ("Confirm transfer of", f"{mosaic_quantity} raw units"),
-                ("of", f"{mosaic.namespace}.{mosaic.mosaic}"),
-            ],
+            TR.nem__confirm_mosaic,
+            (
+                (
+                    TR.nem__confirm_transfer_of,
+                    TR.nem__raw_units_template.format(mosaic_quantity),
+                    False,
+                ),
+                (TR.nem__of, f"{mosaic.namespace}.{mosaic.mosaic}", False),
+            ),
         )
 
 
@@ -117,44 +136,16 @@ def _get_xem_amount(transfer: NEMTransfer) -> int:
     return 0
 
 
-def _get_levy_fee(levy: MosaicLevy, quantity: int) -> int:
-    if levy.type == NEMMosaicLevy.MosaicLevy_Absolute:
-        return levy.fee
-    else:
-        return quantity * levy.fee // NEM_LEVY_PERCENTILE_DIVISOR_ABSOLUTE
-
-
 async def ask_importance_transfer(
-    ctx: Context, common: NEMTransactionCommon, imp: NEMImportanceTransfer
+    common: NEMTransactionCommon, imp: NEMImportanceTransfer
 ) -> None:
+    from trezor.enums import NEMImportanceTransferMode
+
+    from ..layout import require_confirm_text
+
     if imp.mode == NEMImportanceTransferMode.ImportanceTransfer_Activate:
-        m = "Activate"
+        m = TR.nem__activate
     else:
-        m = "Deactivate"
-    await require_confirm_text(ctx, m + " remote harvesting?")
-    await require_confirm_final(ctx, common.fee)
-
-
-async def _require_confirm_transfer(ctx: Context, recipient: str, value: int) -> None:
-    await confirm_output(
-        ctx,
-        recipient,
-        amount=f"Send {format_amount(value, NEM_MAX_DIVISIBILITY)} XEM",
-        font_amount=ui.BOLD,
-        title="Confirm transfer",
-        to_str="\nto\n",
-    )
-
-
-async def _require_confirm_payload(
-    ctx: Context, payload: bytes, encrypted: bool = False
-) -> None:
-    await confirm_text(
-        ctx,
-        "confirm_payload",
-        title="Confirm payload",
-        description="Encrypted:" if encrypted else "Unencrypted:",
-        data=bytes(payload).decode(),
-        icon_color=ui.GREEN if encrypted else ui.RED,
-        br_code=ButtonRequestType.ConfirmOutput,
-    )
+        m = TR.nem__deactivate
+    await require_confirm_text(m + TR.nem__remote_harvesting)
+    await require_confirm_final(common.fee)

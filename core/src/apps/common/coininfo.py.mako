@@ -1,6 +1,9 @@
 # generated from coininfo.py.mako
 # (by running `make templates` in `core`)
 # do not edit manually!
+
+# NOTE: using positional arguments saves 4500 bytes of flash size
+
 from typing import Any
 
 from trezor import utils
@@ -133,26 +136,31 @@ ATTRIBUTES = (
 
 btc_names = ["Bitcoin", "Testnet", "Regtest"]
 
-coins_btc = [c for c in supported_on("trezor2", bitcoin) if c.name in btc_names]
-coins_alt = [c for c in supported_on("trezor2", bitcoin) if c.name not in btc_names]
-
+coins = {}
+for model in ALL_MODELS:
+    coins.setdefault('btc', {})[model] = [c for c in supported_on(model, bitcoin) if c.name in btc_names]
+    coins.setdefault('alt', {})[model] = [c for c in supported_on(model, bitcoin) if c.name not in btc_names]
 %>\
 def by_name(name: str) -> CoinInfo:
-% for coin in coins_btc:
-    if name == ${black_repr(coin["coin_name"])}:
-        return CoinInfo(
-            % for attr, func in ATTRIBUTES:
-            ${attr}=${func(coin[attr])},
-            % endfor
-        )
-% endfor
-    if not utils.BITCOIN_ONLY:
-% for coin in coins_alt:
+% for model in ALL_MODELS:
+    if utils.INTERNAL_MODEL == "${model}":
+% for coin in coins['btc'][model]:
         if name == ${black_repr(coin["coin_name"])}:
             return CoinInfo(
                 % for attr, func in ATTRIBUTES:
-                ${attr}=${func(coin[attr])},
+                ${func(coin[attr])},  # ${attr}
                 % endfor
             )
 % endfor
-    raise ValueError  # Unknown coin name
+        if not utils.BITCOIN_ONLY:
+% for coin in coins['alt'][model]:
+            if name == ${black_repr(coin["coin_name"])}:
+                return CoinInfo(
+                    % for attr, func in ATTRIBUTES:
+                    ${func(coin[attr])},  # ${attr}
+                    % endfor
+                )
+% endfor
+        raise ValueError  # Unknown coin name
+% endfor
+    raise ValueError  # Unknown model

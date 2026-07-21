@@ -1,161 +1,150 @@
 from typing import TYPE_CHECKING
 
-import storage.recovery
-from trezor import ui, wire
-from trezor.enums import ButtonRequestType
-from trezor.ui.layouts import confirm_action, show_success, show_warning
-from trezor.ui.layouts.common import button_request
+from trezor import TR
 from trezor.ui.layouts.recovery import (  # noqa: F401
-    continue_recovery,
-    request_word,
     request_word_count,
+    show_already_added,
+    show_dry_run_result,
     show_group_share_success,
-    show_remaining_shares,
+    show_group_thresholod,
+    show_identifier_mismatch,
+    show_recovery_warning,
 )
 
-from .. import backup_types
-from . import word_validity
+from apps.common import backup_types
+
 from .recover import RecoveryAborted
 
 if TYPE_CHECKING:
-    from typing import Callable
+    from typing import Awaitable
+
     from trezor.enums import BackupType
 
-
-async def confirm_abort(ctx: wire.GenericContext, dry_run: bool = False) -> None:
-    if dry_run:
-        await confirm_action(
-            ctx,
-            "abort_recovery",
-            "Abort seed check",
-            description="Do you really want to abort the seed check?",
-            icon=ui.ICON_WIPE,
-            br_code=ButtonRequestType.ProtectCall,
-        )
-    else:
-        await confirm_action(
-            ctx,
-            "abort_recovery",
-            "Abort recovery",
-            description="Do you really want to abort the recovery process?",
-            action="All progress will be lost.",
-            reverse=True,
-            icon=ui.ICON_WIPE,
-            br_code=ButtonRequestType.ProtectCall,
-        )
+    # RemainingSharesInfo represents the data structure for remaining shares in SLIP-39 recovery:
+    # - Set of tuples, each containing 2 or 3 words identifying a group
+    # - List of remaining share counts for each group
+    # - Group threshold (minimum number of groups required)
+    RemainingSharesInfo = tuple[set[tuple[str, ...]], list[int], int]
 
 
 async def request_mnemonic(
-    ctx: wire.GenericContext, word_count: int, backup_type: BackupType | None
+    word_count: int, backup_type: BackupType | None
 ) -> str | None:
-    await button_request(ctx, "mnemonic", code=ButtonRequestType.MnemonicInput)
+    from trezor.ui.layouts.recovery import request_word
 
-    words: list[str] = []
-    for i in range(word_count):
+    from . import word_validity
+
+    send_button_request = True
+
+    # Pre-allocate the list to enable going back and overwriting words.
+    words: list[str] = [""] * word_count
+    i = 0
+
+    def all_words_entered() -> bool:
+        return i >= word_count
+
+    while not all_words_entered():
+        # Prefilling the previously inputted word in case of going back
         word = await request_word(
-            ctx, i, word_count, is_slip39=backup_types.is_slip39_word_count(word_count)
+            i,
+            word_count,
+            is_slip39=backup_types.is_slip39_word_count(word_count),
+            send_button_request=send_button_request,
+            prefill_word=words[i],
         )
-        words.append(word)
+        send_button_request = False
+
+        if not word:
+            # User has decided to go back
+            if i == 0:
+                # Already at the first word; treat as cancel.
+                return None
+
+            words[i] = ""
+            i -= 1
+            continue
+
+        words[i] = word
+
+        i += 1
 
         try:
-            word_validity.check(backup_type, words)
+            non_empty_words = [word for word in words if word]
+            word_validity.check(backup_type, non_empty_words)
         except word_validity.AlreadyAdded:
-            await show_share_already_added(ctx)
+            # show_share_already_added
+            await show_already_added()
             return None
         except word_validity.IdentifierMismatch:
-            await show_identifier_mismatch(ctx)
+            # show_identifier_mismatch
+            await show_identifier_mismatch()
             return None
         except word_validity.ThresholdReached:
-            await show_group_threshold_reached(ctx)
+            # show_group_threshold_reached
+            await show_group_thresholod()
             return None
 
     return " ".join(words)
 
 
-async def show_dry_run_result(
-    ctx: wire.GenericContext, result: bool, is_slip39: bool
-) -> None:
-    if result:
-        if is_slip39:
-            text = "The entered recovery\nshares are valid and\nmatch what is currently\nin the device."
-        else:
-            text = "The entered recovery\nseed is valid and\nmatches the one\nin the device."
-        await show_success(ctx, "success_dry_recovery", text, button="Continue")
-    else:
-        if is_slip39:
-            text = "The entered recovery\nshares are valid but\ndo not match what is\ncurrently in the device."
-        else:
-            text = "The entered recovery\nseed is valid but does\nnot match the one\nin the device."
-        await show_warning(ctx, "warning_dry_recovery", text, button="Continue")
+def enter_share(
+    word_count: int | None = None,
+    entered_remaining: tuple[int, int] | None = None,
+    remaining_shares_info: RemainingSharesInfo | None = None,
+) -> Awaitable[None]:
+    from trezor import strings
 
+    show_instructions = False
 
-async def show_dry_run_different_type(ctx: wire.GenericContext) -> None:
-    await show_warning(
-        ctx,
-        "warning_dry_recovery",
-        header="Dry run failure",
-        content="Seed in the device was\ncreated using another\nbackup mechanism.",
-        icon=ui.ICON_CANCEL,
-        icon_color=ui.ORANGE_ICON,
-        br_code=ButtonRequestType.ProtectCall,
-    )
+    if word_count is not None:
+        # First-time entry. Show instructions and word count.
+        text = TR.recovery__enter_any_share
+        subtext = TR.recovery__word_count_template.format(word_count)
+        show_instructions = True
 
-
-async def show_invalid_mnemonic(ctx: wire.GenericContext, word_count: int) -> None:
-    if backup_types.is_slip39_word_count(word_count):
-        await show_warning(
-            ctx,
-            "warning_invalid_share",
-            "You have entered\nan invalid recovery\nshare.",
-        )
-    else:
-        await show_warning(
-            ctx,
-            "warning_invalid_seed",
-            "You have entered\nan invalid recovery\nseed.",
+    elif entered_remaining is not None:
+        # Basic Shamir. There is only one group, we report entered/remaining count.
+        entered, remaining = entered_remaining
+        total = entered + remaining
+        text = TR.recovery__x_of_y_entered_template.format(entered, total)
+        subtext = strings.format_plural(
+            TR.recovery__x_more_shares_needed_template_plural,
+            remaining,
+            TR.plurals__x_shares_needed,
         )
 
+    else:
+        # SuperShamir. We cannot easily show entered/remaining across groups,
+        # the caller provided an info_func that has the details.
+        text = TR.recovery__more_shares_needed
+        subtext = None
 
-async def show_share_already_added(ctx: wire.GenericContext) -> None:
-    await show_warning(
-        ctx,
-        "warning_known_share",
-        "Share already entered,\nplease enter\na different share.",
-    )
-
-
-async def show_identifier_mismatch(ctx: wire.GenericContext) -> None:
-    await show_warning(
-        ctx,
-        "warning_mismatched_share",
-        "You have entered\na share from another\nShamir Backup.",
-    )
-
-
-async def show_group_threshold_reached(ctx: wire.GenericContext) -> None:
-    await show_warning(
-        ctx,
-        "warning_group_threshold",
-        "Threshold of this\ngroup has been reached.\nInput share from\ndifferent group.",
+    return homescreen_dialog(
+        TR.buttons__enter_share,
+        text,
+        subtext,
+        show_instructions,
+        remaining_shares_info,
     )
 
 
 async def homescreen_dialog(
-    ctx: wire.GenericContext,
     button_label: str,
     text: str,
     subtext: str | None = None,
-    info_func: Callable | None = None,
+    show_instructions: bool = False,
+    remaining_shares_info: "RemainingSharesInfo | None" = None,
 ) -> None:
-    while True:
-        if await continue_recovery(ctx, button_label, text, subtext, info_func):
-            # go forward in the recovery process
-            break
-        # user has chosen to abort, confirm the choice
-        dry_run = storage.recovery.is_dry_run()
-        try:
-            await confirm_abort(ctx, dry_run)
-        except wire.ActionCancelled:
-            pass
-        else:
-            raise RecoveryAborted
+    import storage.recovery as storage_recovery
+    from trezor.ui.layouts.recovery import continue_recovery
+
+    recovery_type = storage_recovery.get_type()
+    if not await continue_recovery(
+        button_label,
+        text,
+        subtext,
+        recovery_type,
+        show_instructions,
+        remaining_shares_info,
+    ):
+        raise RecoveryAborted

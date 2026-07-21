@@ -14,39 +14,48 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
-from trezorlib import device, messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib import messages, models
+from trezorlib.debuglink import DebugSession as Session
+from trezorlib.debuglink import TrezorTestContext as Client
 
 
-def test_features(client: Client):
-    f0 = client.features
-    # client erases session_id from its features
-    f0.session_id = client.session_id
-    f1 = client.call(messages.Initialize(session_id=f0.session_id))
-    assert f0 == f1
+def test_capabilities(session: Session):
+    assert (messages.Capability.Translations in session.features.capabilities) == (
+        session.model is not models.T1B1
+    )
+    assert (messages.Capability.BLE in session.features.capabilities) == (
+        session.model is models.T3W1
+    )
 
 
-def test_ping(client: Client):
-    ping = client.call(messages.Ping(message="ahoj!"))
+def test_ping(session: Session):
+    ping = session.call(messages.Ping(message="ahoj!"))
     assert ping == messages.Success(message="ahoj!")
 
 
 def test_device_id_same(client: Client):
-    id1 = client.get_device_id()
-    client.init_device()
-    id2 = client.get_device_id()
+    id1 = client.features.device_id
+    client.refresh_features()
+    id2 = client.features.device_id
 
     # ID must be at least 12 characters
     assert len(id1) >= 12
 
-    # Every resulf of UUID must be the same
+    # Every result of UUID must be the same
     assert id1 == id2
 
 
 def test_device_id_different(client: Client):
-    id1 = client.get_device_id()
-    device.wipe(client)
-    id2 = client.get_device_id()
+    # Device id is pre-configured in storage when we get it.
+    # Depending on when exactly we reseed (for ui test consistency purposes),
+    # we may or may not generate the same device id from the same randomness.
+    #
+    # To avoid the problem, this test and similar that depend on device id
+    # must explicitly wipe at start.
+    client.wipe_device(reseed=True)
+    id1 = client.features.device_id
+    client.wipe_device(reseed=False)
+    id2 = client.features.device_id
 
     # Device ID must be fresh after every reset
     assert id1 != id2

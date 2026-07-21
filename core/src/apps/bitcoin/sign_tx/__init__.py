@@ -1,16 +1,8 @@
 from typing import TYPE_CHECKING
 
-from trezor import utils, wire
-from trezor.enums import RequestType
-from trezor.messages import TxRequest
+from trezor import utils
 
-from ..common import BITCOIN_NAMES
 from ..keychain import with_keychain
-from . import approvers, bitcoin, helpers, progress
-
-if not utils.BITCOIN_ONLY:
-    from . import bitcoinlike, decred, zcash_v4
-    from apps.zcash.signer import Zcash
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -19,16 +11,18 @@ if TYPE_CHECKING:
         SignTx,
         TxAckInput,
         TxAckOutput,
-        TxAckPrevMeta,
-        TxAckPrevInput,
-        TxAckPrevOutput,
         TxAckPrevExtraData,
+        TxAckPrevInput,
+        TxAckPrevMeta,
+        TxAckPrevOutput,
+        TxRequest,
     )
 
     from apps.common.coininfo import CoinInfo
     from apps.common.keychain import Keychain
 
     from ..authorization import CoinJoinAuthorization
+    from . import approvers
 
     TxAckType = (
         TxAckInput
@@ -46,21 +40,27 @@ if TYPE_CHECKING:
             keychain: Keychain,
             coin: CoinInfo,
             approver: approvers.Approver | None,
-        ) -> None:
-            ...
+        ) -> None: ...
 
-        async def signer(self) -> None:
-            ...
+        async def signer(self) -> None: ...
 
 
 @with_keychain
 async def sign_tx(
-    ctx: wire.Context,
     msg: SignTx,
     keychain: Keychain,
     coin: CoinInfo,
     authorization: CoinJoinAuthorization | None = None,
 ) -> TxRequest:
+    from trezor import TR
+    from trezor.enums import RequestType
+    from trezor.messages import TxRequest
+    from trezor.ui.layouts import show_continue_in_app
+    from trezor.wire.context import call
+
+    from ..common import BITCOIN_NAMES
+    from . import approvers, bitcoin, helpers, progress
+
     approver: approvers.Approver | None = None
     if authorization:
         approver = approvers.CoinJoinApprover(msg, coin, authorization)
@@ -69,13 +69,21 @@ async def sign_tx(
         signer_class: type[SignerClass] = bitcoin.Bitcoin
     else:
         if coin.decred:
+            from . import decred
+
             signer_class = decred.Decred
         elif coin.overwintered:
             if msg.version == 5:
+                from apps.zcash.signer import Zcash
+
                 signer_class = Zcash
             else:
+                from . import zcash_v4
+
                 signer_class = zcash_v4.ZcashV4
         else:
+            from . import bitcoinlike
+
             signer_class = bitcoinlike.Bitcoinlike
 
     signer = signer_class(msg, keychain, coin, approver).signer()
@@ -87,10 +95,11 @@ async def sign_tx(
             request_class, req = req
             assert TxRequest.is_type_of(req)
             if req.request_type == RequestType.TXFINISHED:
+                show_continue_in_app(TR.send__transaction_signed)
                 return req
-            res = await ctx.call(req, request_class)
+            res = await call(req, request_class)
         elif isinstance(req, helpers.UiConfirm):
-            res = await req.confirm_dialog(ctx)
-            progress.report_init()
+            res = await req.confirm_dialog()
+            progress.progress.report_init()
         else:
             raise TypeError("Invalid signing instruction")

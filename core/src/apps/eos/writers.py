@@ -1,7 +1,5 @@
 from typing import TYPE_CHECKING
 
-from trezor import wire
-
 from apps.common.writers import (
     write_bytes_fixed,
     write_bytes_unchecked,
@@ -13,6 +11,8 @@ from apps.common.writers import (
 )
 
 if TYPE_CHECKING:
+    from buffer_types import AnyBytes
+
     from trezor.messages import (
         EosActionBuyRam,
         EosActionBuyRamBytes,
@@ -20,12 +20,12 @@ if TYPE_CHECKING:
         EosActionDelegate,
         EosActionDeleteAuth,
         EosActionLinkAuth,
-        EosActionUnlinkAuth,
         EosActionNewAccount,
         EosActionRefund,
         EosActionSellRam,
         EosActionTransfer,
         EosActionUndelegate,
+        EosActionUnlinkAuth,
         EosActionUpdateAuth,
         EosActionVoteProducer,
         EosAsset,
@@ -36,11 +36,13 @@ if TYPE_CHECKING:
 
 
 def write_auth(w: Writer, auth: EosAuthorization) -> None:
+    from trezor.wire import DataError
+
     write_uint32_le(w, auth.threshold)
     write_uvarint(w, len(auth.keys))
     for key in auth.keys:
         if key.key is None:
-            raise wire.DataError("Key must be provided explicitly.")
+            raise DataError("Key must be provided explicitly.")
         write_uvarint(w, key.type)
         write_bytes_fixed(w, key.key, 33)
         write_uint16_le(w, key.weight)
@@ -91,14 +93,13 @@ def write_action_sellram(w: Writer, msg: EosActionSellRam) -> None:
 
 
 def write_action_delegate(w: Writer, msg: EosActionDelegate) -> None:
-    write_uint64_le(w, msg.sender)
-    write_uint64_le(w, msg.receiver)
-    write_asset(w, msg.net_quantity)
-    write_asset(w, msg.cpu_quantity)
+    write_action_undelegate(w, msg)
     write_uint8(w, 1 if msg.transfer else 0)
 
 
-def write_action_undelegate(w: Writer, msg: EosActionUndelegate) -> None:
+def write_action_undelegate(
+    w: Writer, msg: EosActionUndelegate | EosActionDelegate
+) -> None:
     write_uint64_le(w, msg.sender)
     write_uint64_le(w, msg.receiver)
     write_asset(w, msg.net_quantity)
@@ -118,25 +119,26 @@ def write_action_voteproducer(w: Writer, msg: EosActionVoteProducer) -> None:
 
 
 def write_action_updateauth(w: Writer, msg: EosActionUpdateAuth) -> None:
-    write_uint64_le(w, msg.account)
-    write_uint64_le(w, msg.permission)
+    write_action_deleteauth(w, msg)
     write_uint64_le(w, msg.parent)
     write_auth(w, msg.auth)
 
 
-def write_action_deleteauth(w: Writer, msg: EosActionDeleteAuth) -> None:
+def write_action_deleteauth(
+    w: Writer, msg: EosActionDeleteAuth | EosActionUpdateAuth
+) -> None:
     write_uint64_le(w, msg.account)
     write_uint64_le(w, msg.permission)
 
 
 def write_action_linkauth(w: Writer, msg: EosActionLinkAuth) -> None:
-    write_uint64_le(w, msg.account)
-    write_uint64_le(w, msg.code)
-    write_uint64_le(w, msg.type)
+    write_action_unlinkauth(w, msg)
     write_uint64_le(w, msg.requirement)
 
 
-def write_action_unlinkauth(w: Writer, msg: EosActionUnlinkAuth) -> None:
+def write_action_unlinkauth(
+    w: Writer, msg: EosActionUnlinkAuth | EosActionLinkAuth
+) -> None:
     write_uint64_le(w, msg.account)
     write_uint64_le(w, msg.code)
     write_uint64_le(w, msg.type)
@@ -163,6 +165,6 @@ def write_asset(w: Writer, asset: EosAsset) -> None:
     write_uint64_le(w, asset.symbol)
 
 
-def write_bytes_prefixed(w: Writer, data: bytes) -> None:
+def write_bytes_prefixed(w: Writer, data: AnyBytes) -> None:
     write_uvarint(w, len(data))
     write_bytes_unchecked(w, data)

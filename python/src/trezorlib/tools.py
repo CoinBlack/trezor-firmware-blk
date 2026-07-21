@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -14,41 +14,36 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
+from __future__ import annotations
+
 import functools
 import hashlib
 import re
 import struct
+import typing as t
 import unicodedata
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AnyStr,
-    Callable,
-    Dict,
-    List,
-    NewType,
-    Optional,
-    Type,
-    Union,
-    overload,
-)
+from contextlib import AbstractContextManager
+from enum import Enum
 
-if TYPE_CHECKING:
-    from .client import TrezorClient
-    from .protobuf import MessageType
+import construct
+import typing_extensions as tx
 
-    # Needed to enforce a return value from decorators
-    # More details: https://www.python.org/dev/peps/pep-0612/
-    from typing import TypeVar
-    from typing_extensions import ParamSpec, Concatenate
+from . import messages
 
-    MT = TypeVar("MT", bound=MessageType)
-    P = ParamSpec("P")
-    R = TypeVar("R")
+P = tx.ParamSpec("P")
+R = t.TypeVar("R")
+C = t.TypeVar("C")
+CM = t.TypeVar("CM", bound=AbstractContextManager)
+
+if t.TYPE_CHECKING:
+    from .client import Session
+
+    SessionFunc = t.Callable[tx.Concatenate[Session, P], R]
+    ContextFunc = t.Callable[tx.Concatenate[CM, P], R]
 
 HARDENED_FLAG = 1 << 31
 
-Address = NewType("Address", List[int])
+Address = t.NewType("Address", list[int])
 
 
 def H_(x: int) -> int:
@@ -56,6 +51,23 @@ def H_(x: int) -> int:
     Shortcut function that "hardens" a number in a BIP44 path.
     """
     return x | HARDENED_FLAG
+
+
+def is_hardened(x: int) -> bool:
+    """
+    Determines if a number in a BIP44 path is hardened.
+    """
+    return x & HARDENED_FLAG != 0
+
+
+def unharden(x: int) -> int:
+    """
+    Unhardens a number in a BIP44 path.
+    """
+    if not is_hardened(x):
+        raise ValueError("Unhardened path component")
+
+    return x ^ HARDENED_FLAG
 
 
 def btc_hash(data: bytes) -> bytes:
@@ -106,59 +118,48 @@ __b58chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 __b58base = len(__b58chars)
 
 
+def b58encode_int(i: int) -> str:
+    """Encode an integer using Base58"""
+    digits = []
+    while i:
+        i, idx = divmod(i, __b58base)
+        digits.append(__b58chars[idx])
+    return "".join(reversed(digits))
+
+
 def b58encode(v: bytes) -> str:
     """encode v, which is a string of bytes, to base58."""
+    origlen = len(v)
+    v = v.lstrip(b"\0")
+    newlen = len(v)
 
-    long_value = 0
-    for c in v:
-        long_value = long_value * 256 + c
+    acc = int.from_bytes(v, byteorder="big")  # first byte is most significant
 
-    result = ""
-    while long_value >= __b58base:
-        div, mod = divmod(long_value, __b58base)
-        result = __b58chars[mod] + result
-        long_value = div
-    result = __b58chars[long_value] + result
-
-    # Bitcoin does a little leading-zero-compression:
-    # leading 0-bytes in the input become leading-1s
-    nPad = 0
-    for c in v:
-        if c == 0:
-            nPad += 1
-        else:
-            break
-
-    return (__b58chars[0] * nPad) + result
+    result = b58encode_int(acc)
+    return __b58chars[0] * (origlen - newlen) + result
 
 
-def b58decode(v: AnyStr, length: Optional[int] = None) -> bytes:
+def b58decode_int(v: str) -> int:
+    """Decode a Base58 encoded string as an integer"""
+    decimal = 0
+    try:
+        for char in v:
+            decimal = decimal * __b58base + __b58chars.index(char)
+    except KeyError:
+        raise ValueError(f"Invalid character {char!r}") from None
+    return decimal
+
+
+def b58decode(v: t.AnyStr, length: int | None = None) -> bytes:
     """decode v into a string of len bytes."""
-    str_v = v.decode() if isinstance(v, bytes) else v
+    v_str = v if isinstance(v, str) else v.decode()
+    origlen = len(v_str)
+    v_str = v_str.lstrip(__b58chars[0])
+    newlen = len(v_str)
 
-    for c in str_v:
-        if c not in __b58chars:
-            raise ValueError("invalid Base58 string")
+    acc = b58decode_int(v_str)
 
-    long_value = 0
-    for (i, c) in enumerate(str_v[::-1]):
-        long_value += __b58chars.find(c) * (__b58base**i)
-
-    result = b""
-    while long_value >= 256:
-        div, mod = divmod(long_value, 256)
-        result = struct.pack("B", mod) + result
-        long_value = div
-    result = struct.pack("B", long_value) + result
-
-    nPad = 0
-    for c in str_v:
-        if c == __b58chars[0]:
-            nPad += 1
-        else:
-            break
-
-    result = b"\x00" * nPad + result
+    result = acc.to_bytes(origlen - newlen + (acc.bit_length() + 7) // 8, "big")
     if length is not None and len(result) != length:
         raise ValueError("Result length does not match expected_length")
 
@@ -170,7 +171,7 @@ def b58check_encode(v: bytes) -> str:
     return b58encode(v + checksum)
 
 
-def b58check_decode(v: AnyStr, length: Optional[int] = None) -> bytes:
+def b58check_decode(v: t.AnyStr, length: int | None = None) -> bytes:
     dec = b58decode(v, length)
     data, checksum = dec[:-4], dec[-4:]
     if btc_hash(data)[:4] != checksum:
@@ -211,7 +212,24 @@ def parse_path(nstr: str) -> Address:
         raise ValueError("Invalid BIP32 path", nstr) from e
 
 
-def prepare_message_bytes(txt: AnyStr) -> bytes:
+def format_path(path: Address, flag: str = "h") -> str:
+    """
+    Convert BIP32 path list of uint32 integers with hardened flags to string.
+    Several conventions are supported to denote the hardened flag: 1', 1h
+
+    e.g.: [0, 0x80000001, 1] -> "m/0/1h/1"
+
+    :param path: list of integers
+    :return: path string
+    """
+    nstr = "m"
+    for i in path:
+        nstr += f"/{unharden(i)}{flag if is_hardened(i) else ''}"
+
+    return nstr
+
+
+def prepare_message_bytes(txt: t.AnyStr) -> bytes:
     """
     Make message suitable for protobuf.
     If the message is a Unicode string, normalize it.
@@ -220,76 +238,6 @@ def prepare_message_bytes(txt: AnyStr) -> bytes:
     if isinstance(txt, bytes):
         return txt
     return unicodedata.normalize("NFC", txt).encode()
-
-
-# NOTE for type tests (mypy/pyright):
-# Overloads below have a goal of enforcing the return value
-# that should be returned from the original function being decorated
-# while still preserving the function signature (the inputted arguments
-# are going to be type-checked).
-# Currently (November 2021) mypy does not support "ParamSpec" typing
-# construct, so it will not understand it and will complain about
-# definitions below.
-
-
-@overload
-def expect(
-    expected: "Type[MT]",
-) -> "Callable[[Callable[P, MessageType]], Callable[P, MT]]":
-    ...
-
-
-@overload
-def expect(
-    expected: "Type[MT]", *, field: str, ret_type: "Type[R]"
-) -> "Callable[[Callable[P, MessageType]], Callable[P, R]]":
-    ...
-
-
-def expect(
-    expected: "Type[MT]",
-    *,
-    field: Optional[str] = None,
-    ret_type: "Optional[Type[R]]" = None,
-) -> "Callable[[Callable[P, MessageType]], Callable[P, Union[MT, R]]]":
-    """
-    Decorator checks if the method
-    returned one of expected protobuf messages
-    or raises an exception
-    """
-
-    def decorator(f: "Callable[P, MessageType]") -> "Callable[P, Union[MT, R]]":
-        @functools.wraps(f)
-        def wrapped_f(*args: "P.args", **kwargs: "P.kwargs") -> "Union[MT, R]":
-            __tracebackhide__ = True  # for pytest # pylint: disable=W0612
-            ret = f(*args, **kwargs)
-            if not isinstance(ret, expected):
-                raise RuntimeError(f"Got {ret.__class__}, expected {expected}")
-            if field is not None:
-                return getattr(ret, field)
-            else:
-                return ret
-
-        return wrapped_f
-
-    return decorator
-
-
-def session(
-    f: "Callable[Concatenate[TrezorClient, P], R]",
-) -> "Callable[Concatenate[TrezorClient, P], R]":
-    # Decorator wraps a BaseClient method
-    # with session activation / deactivation
-    @functools.wraps(f)
-    def wrapped_f(client: "TrezorClient", *args: "P.args", **kwargs: "P.kwargs") -> "R":
-        __tracebackhide__ = True  # for pytest # pylint: disable=W0612
-        client.open()
-        try:
-            return f(client, *args, **kwargs)
-        finally:
-            client.close()
-
-    return wrapped_f
 
 
 # de-camelcasifier
@@ -304,14 +252,16 @@ def from_camelcase(s: str) -> str:
     return ALL_CAP_RE.sub(r"\1_\2", s).lower()
 
 
-def dict_from_camelcase(d: Any, renames: Optional[dict] = None) -> dict:
+def dict_from_camelcase(
+    d: t.Any, renames: dict[str, str] | None = None
+) -> dict[str, t.Any]:
     if not isinstance(d, dict):
         return d
 
     if renames is None:
         renames = {}
 
-    res: Dict[str, Any] = {}
+    res = {}
     for key, value in d.items():
         newkey = from_camelcase(key)
         renamed_key = renames.get(newkey) or renames.get(key)
@@ -372,3 +322,83 @@ def descriptor_checksum(desc: str) -> str:
     for j in range(0, 8):
         ret[j] = CHECKSUM_CHARSET[(c >> (5 * (7 - j))) & 31]
     return "".join(ret)
+
+
+class EnumAdapter(construct.Adapter):
+    def __init__(self, subcon: construct.Adapter, enum: type[Enum]) -> None:
+        self.enum = enum
+        super().__init__(subcon)
+
+    def _encode(self, obj: t.Any, context: t.Any, path: t.Any) -> t.Any:
+        if isinstance(obj, self.enum):
+            return obj.value
+        return obj
+
+    def _decode(self, obj: t.Any, context: t.Any, path: t.Any) -> t.Any:
+        try:
+            return self.enum(obj)
+        except ValueError:
+            return obj
+
+
+class TupleAdapter(construct.Adapter):
+    def __init__(self, *subcons: construct.Adapter) -> None:
+        super().__init__(construct.Sequence(*subcons))
+
+    def _encode(self, obj: t.Any, context: t.Any, path: t.Any) -> t.Any:
+        return obj
+
+    def _decode(self, obj: t.Any, context: t.Any, path: t.Any) -> t.Any:
+        return tuple(obj)
+
+
+def enter_context(context_func: ContextFunc[CM, P, R]) -> ContextFunc[CM, P, R]:
+    """Generic wrapper around any function or method that accepts a context manager
+    as its first argument.
+
+    The function will run inside the context.
+    """
+
+    @functools.wraps(context_func)
+    def wrapper(context: CM, *args: P.args, **kwargs: P.kwargs) -> R:
+        __tracebackhide__ = True  # for pytest # pylint: disable=W0612
+        with context:
+            return context_func(context, *args, **kwargs)
+
+    return wrapper
+
+
+class workflow(t.Generic[P, R]):
+    """Trezor workflow call decorator.
+
+    Functionally, keeps a connection open between steps of the workflow.
+    Can also carry metadata about supported Trezor version and required capabilities.
+    """
+
+    def __init__(
+        self,
+        *,
+        from_version: tuple[int, int, int] | None = None,
+        capability: messages.Capability | None = None,
+        capabilities: set[messages.Capability] | None = None,
+    ) -> None:
+        self.from_version = from_version
+        if capability is not None and capabilities is not None:
+            raise ValueError("Cannot specify both capability and capabilities")
+        if capability is not None:
+            capabilities = {capability}
+        elif capabilities is None:
+            capabilities = set()
+        self.capabilities = capabilities
+        self.func: SessionFunc[P, R] | None = None
+
+    def __call__(self, func: SessionFunc[P, R]) -> SessionFunc[P, R]:
+        self.func = func
+        return self.wrapper
+
+    def wrapper(self, session: Session, *args: P.args, **kwargs: P.kwargs) -> R:
+        __tracebackhide__ = True  # for pytest # pylint: disable=W0612
+        if self.func is None:
+            raise RuntimeError("workflow decorator must be used with a function")
+        with session:
+            return self.func(session, *args, **kwargs)

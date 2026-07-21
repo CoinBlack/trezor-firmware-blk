@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -14,15 +14,25 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Tuple
 
 import click
 
 from .. import misc, tools
-from . import with_client
+from . import ChoiceType, with_session
 
 if TYPE_CHECKING:
-    from ..client import TrezorClient
+    from ..client import Session
+
+
+PROMPT_TYPE = ChoiceType(
+    {
+        "always": (True, True),
+        "never": (False, False),
+        "decrypt": (False, True),
+        "encrypt": (True, False),
+    }
+)
 
 
 @click.group(name="crypto")
@@ -32,31 +42,80 @@ def cli() -> None:
 
 @cli.command()
 @click.argument("size", type=int)
-@with_client
-def get_entropy(client: "TrezorClient", size: int) -> str:
+@with_session
+def get_entropy(session: "Session", size: int) -> str:
     """Get random bytes from device."""
-    return misc.get_entropy(client, size).hex()
+    return misc.get_entropy(session, size).hex()
 
 
 @cli.command()
-@click.option("-n", "--address", required=True, help="BIP-32 path, e.g. m/10016'/0")
+@click.option("-n", "--address", required=True, help="BIP-32 path, e.g. m/10016h/0")
+@click.option(
+    "-p", "--prompt", type=PROMPT_TYPE, default="always", help="Prompt for passphrase"
+)
 @click.argument("key")
 @click.argument("value")
-@with_client
-def encrypt_keyvalue(client: "TrezorClient", address: str, key: str, value: str) -> str:
-    """Encrypt value by given key and path."""
+@with_session
+def encrypt_keyvalue(
+    session: "Session",
+    address: str,
+    key: str,
+    value: str,
+    prompt: Tuple[bool, bool],
+) -> str:
+    """Encrypt value by given key and path.
+
+    The `prompt` option controls whether the device will prompt for confirmation on
+    encrypting and decrypting the value. The default is to prompt for both encryption
+    and decryption.
+
+    You must provide the same `prompt` option to the `decrypt-keyvalue` command,
+    otherwise the decryption will fail.
+    """
+    ask_on_encrypt, ask_on_decrypt = prompt
     address_n = tools.parse_path(address)
-    return misc.encrypt_keyvalue(client, address_n, key, value.encode()).hex()
+    return misc.encrypt_keyvalue(
+        session,
+        address_n,
+        key,
+        value.encode(),
+        ask_on_encrypt=ask_on_encrypt,
+        ask_on_decrypt=ask_on_decrypt,
+    ).hex()
 
 
 @cli.command()
-@click.option("-n", "--address", required=True, help="BIP-32 path, e.g. m/10016'/0")
+@click.option("-n", "--address", required=True, help="BIP-32 path, e.g. m/10016h/0")
+@click.option(
+    "-p", "--prompt", type=PROMPT_TYPE, default="always", help="Prompt for passphrase"
+)
 @click.argument("key")
 @click.argument("value")
-@with_client
+@with_session
 def decrypt_keyvalue(
-    client: "TrezorClient", address: str, key: str, value: str
+    session: "Session",
+    address: str,
+    key: str,
+    value: str,
+    prompt: Tuple[bool, bool],
 ) -> bytes:
-    """Decrypt value by given key and path."""
+    """Decrypt value by given key and path.
+
+    The `prompt` option controls whether the device will prompt for confirmation on
+    encrypting and decrypting the value. The default is to prompt for both encryption
+    and decryption.
+
+    You must use the same `prompt` value that you used for encryption, otherwise the
+    decryption will fail. I.e., it is not possible to encrypt with "--prompt=decrypt"
+    and decrypt with "--prompt=never".
+    """
+    ask_on_encrypt, ask_on_decrypt = prompt
     address_n = tools.parse_path(address)
-    return misc.decrypt_keyvalue(client, address_n, key, bytes.fromhex(value))
+    return misc.decrypt_keyvalue(
+        session,
+        address_n,
+        key,
+        bytes.fromhex(value),
+        ask_on_encrypt=ask_on_encrypt,
+        ask_on_decrypt=ask_on_decrypt,
+    )

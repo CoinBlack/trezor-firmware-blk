@@ -16,12 +16,13 @@
 
 import pytest
 
-from trezorlib import btc, device, messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib import btc, device, messages, models
+from trezorlib.debuglink import DebugSession as Session
 from trezorlib.exceptions import TrezorFailure
 from trezorlib.messages import SafetyCheckLevel
 from trezorlib.tools import parse_path
 
+from ...common import is_core
 from ...tx_cache import TxCache
 from .signtx import (
     assert_tx_matches,
@@ -80,8 +81,8 @@ TXHASH_1010b2 = bytes.fromhex(
 )
 
 
-@pytest.mark.skip_t1
-def test_p2pkh_presigned(client: Client):
+@pytest.mark.models("core")
+def test_p2pkh_presigned(session: Session):
     inp1 = messages.TxInputType(
         # mvbu1Gdy8SUjTenqerxUaZyYjmveZvt33q
         address_n=parse_path("m/44h/1h/0h/0/0"),
@@ -141,9 +142,9 @@ def test_p2pkh_presigned(client: Client):
     )
 
     # Test with first input as pre-signed external.
-    with client:
+    with session.test_ctx:
         _, serialized_tx = btc.sign_tx(
-            client,
+            session,
             "Testnet",
             [inp1ext, inp2],
             [out1, out2],
@@ -154,9 +155,9 @@ def test_p2pkh_presigned(client: Client):
     assert serialized_tx.hex() == expected_tx
 
     # Test with second input as pre-signed external.
-    with client:
+    with session.test_ctx:
         _, serialized_tx = btc.sign_tx(
-            client,
+            session,
             "Testnet",
             [inp1, inp2ext],
             [out1, out2],
@@ -169,7 +170,7 @@ def test_p2pkh_presigned(client: Client):
     inp2ext.script_sig[10] ^= 1
     with pytest.raises(TrezorFailure, match="Invalid signature"):
         _, serialized_tx = btc.sign_tx(
-            client,
+            session,
             "Testnet",
             [inp1, inp2ext],
             [out1, out2],
@@ -177,8 +178,8 @@ def test_p2pkh_presigned(client: Client):
         )
 
 
-@pytest.mark.skip_t1
-def test_p2wpkh_in_p2sh_presigned(client: Client):
+@pytest.mark.models("core")
+def test_p2wpkh_in_p2sh_presigned(session: Session):
     inp1 = messages.TxInputType(
         # 2N1LGaGg836mqSQqiuUBLfcyGBhyZbremDX
         amount=123_456_789,
@@ -215,17 +216,20 @@ def test_p2wpkh_in_p2sh_presigned(client: Client):
         script_type=messages.OutputScriptType.PAYTOADDRESS,
     )
 
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_input(1),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 request_output(1),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 request_output(2),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(0),
                 request_meta(TXHASH_20912f),
@@ -248,7 +252,7 @@ def test_p2wpkh_in_p2sh_presigned(client: Client):
             ]
         )
         _, serialized_tx = btc.sign_tx(
-            client,
+            session,
             "Testnet",
             [inp1, inp2],
             [out1, out2, out3],
@@ -263,17 +267,20 @@ def test_p2wpkh_in_p2sh_presigned(client: Client):
 
     # Test corrupted script hash in scriptsig.
     inp1.script_sig[10] ^= 1
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_input(1),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 request_output(1),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 request_output(2),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(0),
                 request_meta(TXHASH_20912f),
@@ -286,7 +293,7 @@ def test_p2wpkh_in_p2sh_presigned(client: Client):
 
         with pytest.raises(TrezorFailure, match="Invalid public key hash"):
             btc.sign_tx(
-                client,
+                session,
                 "Testnet",
                 [inp1, inp2],
                 [out1, out2, out3],
@@ -294,8 +301,8 @@ def test_p2wpkh_in_p2sh_presigned(client: Client):
             )
 
 
-@pytest.mark.skip_t1
-def test_p2wpkh_presigned(client: Client):
+@pytest.mark.models("core")
+def test_p2wpkh_presigned(session: Session):
     inp1 = messages.TxInputType(
         # tb1qkvwu9g3k2pdxewfqr7syz89r3gj557l3uuf9r9
         address_n=parse_path("m/84h/1h/0h/0/0"),
@@ -332,9 +339,9 @@ def test_p2wpkh_presigned(client: Client):
     )
 
     # Test with second input as pre-signed external.
-    with client:
+    with session.test_ctx:
         _, serialized_tx = btc.sign_tx(
-            client,
+            session,
             "Testnet",
             [inp1, inp2],
             [out1, out2],
@@ -351,7 +358,7 @@ def test_p2wpkh_presigned(client: Client):
     inp2.witness[10] ^= 1
     with pytest.raises(TrezorFailure, match="Invalid signature"):
         btc.sign_tx(
-            client,
+            session,
             "Testnet",
             [inp1, inp2],
             [out1, out2],
@@ -359,8 +366,8 @@ def test_p2wpkh_presigned(client: Client):
         )
 
 
-@pytest.mark.skip_t1
-def test_p2wsh_external_presigned(client: Client):
+@pytest.mark.models("core")
+def test_p2wsh_external_presigned(session: Session):
     inp1 = messages.TxInputType(
         address_n=parse_path("m/84h/1h/0h/0/0"),
         amount=10_000,
@@ -392,13 +399,14 @@ def test_p2wsh_external_presigned(client: Client):
         script_type=messages.OutputScriptType.PAYTOADDRESS,
     )
 
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_input(1),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(0),
                 request_meta(TXHASH_ec16dc),
@@ -421,7 +429,7 @@ def test_p2wsh_external_presigned(client: Client):
         )
 
         _, serialized_tx = btc.sign_tx(
-            client,
+            session,
             "Testnet",
             [inp1, inp2],
             [out1],
@@ -436,13 +444,14 @@ def test_p2wsh_external_presigned(client: Client):
 
     # Test corrupted signature in witness.
     inp2.witness[10] ^= 1
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_input(1),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(0),
                 request_meta(TXHASH_ec16dc),
@@ -461,12 +470,12 @@ def test_p2wsh_external_presigned(client: Client):
 
         with pytest.raises(TrezorFailure, match="Invalid signature"):
             btc.sign_tx(
-                client, "Testnet", [inp1, inp2], [out1], prev_txes=TX_CACHE_TESTNET
+                session, "Testnet", [inp1, inp2], [out1], prev_txes=TX_CACHE_TESTNET
             )
 
 
-@pytest.mark.skip_t1
-def test_p2tr_external_presigned(client: Client):
+@pytest.mark.models("core")
+def test_p2tr_external_presigned(session: Session):
     inp1 = messages.TxInputType(
         # tb1p8tvmvsvhsee73rhym86wt435qrqm92psfsyhy6a3n5gw455znnpqm8wald
         address_n=parse_path("m/86h/1h/0h/0/1"),
@@ -500,13 +509,14 @@ def test_p2tr_external_presigned(client: Client):
         amount=4_600,
         script_type=messages.OutputScriptType.PAYTOTAPROOT,
     )
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_input(1),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 request_output(1),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(1),
@@ -520,7 +530,7 @@ def test_p2tr_external_presigned(client: Client):
             ]
         )
         _, serialized_tx = btc.sign_tx(
-            client, "Testnet", [inp1, inp2], [out1, out2], prev_txes=TX_CACHE_TESTNET
+            session, "Testnet", [inp1, inp2], [out1, out2], prev_txes=TX_CACHE_TESTNET
         )
 
     assert_tx_matches(
@@ -531,13 +541,14 @@ def test_p2tr_external_presigned(client: Client):
 
     # Test corrupted signature in witness.
     inp2.witness[10] ^= 1
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_input(1),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 request_output(1),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(1),
@@ -547,7 +558,7 @@ def test_p2tr_external_presigned(client: Client):
 
         with pytest.raises(TrezorFailure, match="Invalid signature"):
             btc.sign_tx(
-                client,
+                session,
                 "Testnet",
                 [inp1, inp2],
                 [out1, out2],
@@ -555,20 +566,19 @@ def test_p2tr_external_presigned(client: Client):
             )
 
 
-@pytest.mark.skip_t1
-def test_p2pkh_with_proof(client: Client):
+@pytest.mark.models("core")
+def test_p2pkh_with_proof(session: Session):
     # TODO
     pass
 
 
-@pytest.mark.skip_t1
-def test_p2wpkh_in_p2sh_with_proof(client: Client):
+@pytest.mark.models("core")
+def test_p2wpkh_in_p2sh_with_proof(session: Session):
     # TODO
     pass
 
 
-@pytest.mark.skip_t1
-def test_p2wpkh_with_proof(client: Client):
+def test_p2wpkh_with_proof(session: Session):
     inp1 = messages.TxInputType(
         # seed "alcohol woman abuse must during monitor noble actual mixed trade anger aisle"
         # 84'/1'/0'/0/0
@@ -600,15 +610,18 @@ def test_p2wpkh_with_proof(client: Client):
         script_type=messages.OutputScriptType.PAYTOADDRESS,
     )
 
-    with client:
+    with session.test_ctx as client:
+        is_t1 = session.model is models.T1B1
         client.set_expected_responses(
             [
                 request_input(0),
                 request_input(1),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 request_output(1),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(0),
                 request_meta(TXHASH_e5b7e2),
@@ -624,12 +637,13 @@ def test_p2wpkh_with_proof(client: Client):
                 request_input(1),
                 request_output(0),
                 request_output(1),
+                (is_t1, request_input(0)),
                 request_input(1),
                 request_finished(),
             ]
         )
         _, serialized_tx = btc.sign_tx(
-            client,
+            session,
             "Testnet",
             [inp1, inp2],
             [out1, out2],
@@ -644,9 +658,9 @@ def test_p2wpkh_with_proof(client: Client):
 
     # Test corrupted ownership proof.
     inp1.ownership_proof[10] ^= 1
-    with pytest.raises(TrezorFailure, match="Invalid signature"):
+    with pytest.raises(TrezorFailure, match="Invalid signature|Invalid external input"):
         btc.sign_tx(
-            client,
+            session,
             "Testnet",
             [inp1, inp2],
             [out1, out2],
@@ -654,11 +668,10 @@ def test_p2wpkh_with_proof(client: Client):
         )
 
 
-@pytest.mark.skip_t1
 @pytest.mark.setup_client(
     mnemonic="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 )
-def test_p2tr_with_proof(client: Client):
+def test_p2tr_with_proof(session: Session):
     # Resulting TXID 48ec6dc7bb772ff18cbce0135fedda7c0e85212c7b2f85a5d0cc7a917d77c48a
 
     inp1 = messages.TxInputType(
@@ -690,24 +703,26 @@ def test_p2tr_with_proof(client: Client):
         script_type=messages.OutputScriptType.PAYTOADDRESS,
     )
 
-    with client:
+    with session.test_ctx as client:
+        is_t1 = session.model is models.T1B1
         client.set_expected_responses(
             [
                 request_input(0),
                 request_input(1),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 messages.ButtonRequest(code=B.SignTx),
-                request_input(0),
                 request_input(0),
                 request_input(1),
                 request_output(0),
+                (is_t1, request_input(0)),
                 request_input(1),
                 request_finished(),
             ]
         )
         _, serialized_tx = btc.sign_tx(
-            client, "Testnet", [inp1, inp2], [out1], prev_txes=TX_CACHE_TESTNET
+            session, "Testnet", [inp1, inp2], [out1], prev_txes=TX_CACHE_TESTNET
         )
 
     # Transaction does not exist on the blockchain, not using assert_tx_matches()
@@ -720,12 +735,13 @@ def test_p2tr_with_proof(client: Client):
 
     # Test corrupted ownership proof.
     inp1.ownership_proof[10] ^= 1
-    with pytest.raises(TrezorFailure, match="Invalid signature"):
-        btc.sign_tx(client, "Testnet", [inp1, inp2], [out1], prev_txes=TX_CACHE_TESTNET)
+    with pytest.raises(TrezorFailure, match="Invalid signature|Invalid external input"):
+        btc.sign_tx(
+            session, "Testnet", [inp1, inp2], [out1], prev_txes=TX_CACHE_TESTNET
+        )
 
 
-@pytest.mark.skip_t1
-def test_p2wpkh_with_false_proof(client: Client):
+def test_p2wpkh_with_false_proof(session: Session):
     inp1 = messages.TxInputType(
         # tb1qkvwu9g3k2pdxewfqr7syz89r3gj557l3uuf9r9
         address_n=parse_path("m/84h/1h/0h/0/0"),
@@ -754,31 +770,18 @@ def test_p2wpkh_with_false_proof(client: Client):
         script_type=messages.OutputScriptType.PAYTOWITNESS,
     )
 
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_input(1),
-                request_output(0),
-                messages.ButtonRequest(code=B.ConfirmOutput),
-                messages.ButtonRequest(code=B.SignTx),
-                request_input(0),
-                request_meta(TXHASH_70f987),
-                request_input(0, TXHASH_70f987),
-                request_output(0, TXHASH_70f987),
-                request_output(1, TXHASH_70f987),
-                request_input(1),
-                request_meta(TXHASH_65b768),
-                request_input(0, TXHASH_65b768),
-                request_output(0, TXHASH_65b768),
-                request_output(1, TXHASH_65b768),
                 messages.Failure(code=messages.FailureType.DataError),
             ]
         )
 
         with pytest.raises(TrezorFailure, match="Invalid external input"):
             btc.sign_tx(
-                client,
+                session,
                 "Testnet",
                 [inp1, inp2],
                 [out1],
@@ -786,7 +789,7 @@ def test_p2wpkh_with_false_proof(client: Client):
             )
 
 
-def test_p2tr_external_unverified(client: Client):
+def test_p2tr_external_unverified(session: Session):
     inp1 = messages.TxInputType(
         # tb1pswrqtykue8r89t9u4rprjs0gt4qzkdfuursfnvqaa3f2yql07zmq8s8a5u
         address_n=parse_path("m/86h/1h/0h/0/0"),
@@ -822,13 +825,13 @@ def test_p2tr_external_unverified(client: Client):
     # Unverified external inputs should be rejected when safety checks are enabled.
     with pytest.raises(TrezorFailure, match="[Ee]xternal input"):
         btc.sign_tx(
-            client, "Testnet", [inp1, inp2], [out1, out2], prev_txes=TX_CACHE_TESTNET
+            session, "Testnet", [inp1, inp2], [out1, out2], prev_txes=TX_CACHE_TESTNET
         )
 
     # Signing should succeed after disabling safety checks.
-    device.apply_settings(client, safety_checks=SafetyCheckLevel.PromptTemporarily)
+    device.apply_settings(session, safety_checks=SafetyCheckLevel.PromptTemporarily)
     _, serialized_tx = btc.sign_tx(
-        client, "Testnet", [inp1, inp2], [out1, out2], prev_txes=TX_CACHE_TESTNET
+        session, "Testnet", [inp1, inp2], [out1, out2], prev_txes=TX_CACHE_TESTNET
     )
 
     # Second witness is missing from the serialized transaction.
@@ -839,7 +842,7 @@ def test_p2tr_external_unverified(client: Client):
     )
 
 
-def test_p2wpkh_external_unverified(client: Client):
+def test_p2wpkh_external_unverified(session: Session):
     inp1 = messages.TxInputType(
         # tb1qkvwu9g3k2pdxewfqr7syz89r3gj557l3uuf9r9
         address_n=parse_path("m/84h/1h/0h/0/0"),
@@ -874,13 +877,13 @@ def test_p2wpkh_external_unverified(client: Client):
     # Unverified external inputs should be rejected when safety checks are enabled.
     with pytest.raises(TrezorFailure, match="[Ee]xternal input"):
         btc.sign_tx(
-            client, "Testnet", [inp1, inp2], [out1, out2], prev_txes=TX_CACHE_TESTNET
+            session, "Testnet", [inp1, inp2], [out1, out2], prev_txes=TX_CACHE_TESTNET
         )
 
     # Signing should succeed after disabling safety checks.
-    device.apply_settings(client, safety_checks=SafetyCheckLevel.PromptTemporarily)
+    device.apply_settings(session, safety_checks=SafetyCheckLevel.PromptTemporarily)
     _, serialized_tx = btc.sign_tx(
-        client, "Testnet", [inp1, inp2], [out1, out2], prev_txes=TX_CACHE_TESTNET
+        session, "Testnet", [inp1, inp2], [out1, out2], prev_txes=TX_CACHE_TESTNET
     )
 
     # Second witness is missing from the serialized transaction.

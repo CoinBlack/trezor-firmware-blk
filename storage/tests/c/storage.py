@@ -1,14 +1,24 @@
 import ctypes as c
 import os
+import sys
+
+sys.path.append(
+    os.path.normpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "python", "src")
+    )
+)
+import consts
 
 EXTERNAL_SALT_LEN = 32
 sectrue = -1431655766  # 0xAAAAAAAAA
-fname = os.path.join(os.path.dirname(__file__), "libtrezor-storage.so")
+UNLOCK_OK = 0
+PIN_CHANGE_OK = 0
 
 
 class Storage:
-    def __init__(self) -> None:
-        self.lib = c.cdll.LoadLibrary(fname)
+    def __init__(self, lib_name) -> None:
+        lib_path = os.path.join(os.path.dirname(__file__), lib_name)
+        self.lib = c.cdll.LoadLibrary(lib_path)
         self.flash_size = c.cast(self.lib.FLASH_SIZE, c.POINTER(c.c_uint32))[0]
         self.flash_buffer = c.create_string_buffer(self.flash_size)
         c.cast(self.lib.FLASH_BUFFER, c.POINTER(c.c_void_p))[0] = c.addressof(
@@ -24,7 +34,7 @@ class Storage:
     def unlock(self, pin: str, ext_salt: bytes = None) -> bool:
         if ext_salt is not None and len(ext_salt) != EXTERNAL_SALT_LEN:
             raise ValueError
-        return sectrue == self.lib.storage_unlock(pin.encode(), len(pin), ext_salt)
+        return UNLOCK_OK == self.lib.storage_unlock(pin.encode(), len(pin), ext_salt)
 
     def lock(self) -> None:
         self.lib.storage_lock()
@@ -37,21 +47,14 @@ class Storage:
 
     def change_pin(
         self,
-        oldpin: str,
         newpin: str,
-        old_ext_salt: bytes = None,
         new_ext_salt: bytes = None,
     ) -> bool:
-        if old_ext_salt is not None and len(old_ext_salt) != EXTERNAL_SALT_LEN:
-            raise ValueError
         if new_ext_salt is not None and len(new_ext_salt) != EXTERNAL_SALT_LEN:
             raise ValueError
-        return sectrue == self.lib.storage_change_pin(
-            oldpin.encode(),
-            len(oldpin),
+        return PIN_CHANGE_OK == self.lib.storage_change_pin(
             newpin.encode(),
             len(newpin),
-            old_ext_salt,
             new_ext_salt,
         )
 
@@ -99,3 +102,10 @@ class Storage:
         if len(buf) != self.flash_size:
             raise RuntimeError("Failed to set flash buffer due to length mismatch.")
         self.flash_buffer.value = buf
+
+    def _get_active_sector(self) -> int:
+        if self._dump()[0][:8].hex() == consts.NORCOW_MAGIC_AND_VERSION.hex():
+            return 0
+        elif self._dump()[1][:8].hex() == consts.NORCOW_MAGIC_AND_VERSION.hex():
+            return 1
+        raise RuntimeError("Failed to get active sector.")

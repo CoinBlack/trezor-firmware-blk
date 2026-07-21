@@ -1,25 +1,21 @@
 from typing import TYPE_CHECKING
 
-from trezor.crypto.curve import secp256k1
-from trezor.crypto.hashlib import sha3_256
-from trezor.messages import EthereumMessageSignature
-from trezor.ui.layouts import confirm_signverify
-from trezor.utils import HashWriter
-
-from apps.common import paths
-from apps.common.signverify import decode_message
-
-from .helpers import address_from_bytes
 from .keychain import PATTERNS_ADDRESS, with_keychain_from_path
 
 if TYPE_CHECKING:
-    from trezor.messages import EthereumSignMessage
-    from trezor.wire import Context
+    from buffer_types import AnyBytes
+
+    from trezor.messages import EthereumMessageSignature, EthereumSignMessage
 
     from apps.common.keychain import Keychain
 
+    from .definitions import Definitions
 
-def message_digest(message: bytes) -> bytes:
+
+def message_digest(message: AnyBytes) -> bytes:
+    from trezor.crypto.hashlib import sha3_256
+    from trezor.utils import HashWriter
+
     h = HashWriter(sha3_256(keccak=True))
     signed_message_header = b"\x19Ethereum Signed Message:\n"
     h.extend(signed_message_header)
@@ -30,14 +26,26 @@ def message_digest(message: bytes) -> bytes:
 
 @with_keychain_from_path(*PATTERNS_ADDRESS)
 async def sign_message(
-    ctx: Context, msg: EthereumSignMessage, keychain: Keychain
+    msg: EthereumSignMessage,
+    keychain: Keychain,
+    defs: Definitions,
 ) -> EthereumMessageSignature:
-    await paths.validate_path(ctx, keychain, msg.address_n)
+    from trezor.crypto.curve import secp256k1
+    from trezor.messages import EthereumMessageSignature
+    from trezor.ui.layouts import confirm_signverify
+
+    from apps.common import paths
+    from apps.common.signverify import decode_message
+
+    from .helpers import address_from_bytes
+
+    await paths.validate_path(keychain, msg.address_n)
 
     node = keychain.derive(msg.address_n)
-    address = address_from_bytes(node.ethereum_pubkeyhash())
+    address = address_from_bytes(node.ethereum_pubkeyhash(), defs.network)
+    path = paths.address_n_to_str(msg.address_n)
     await confirm_signverify(
-        ctx, "ETH", decode_message(msg.message), address, verify=False
+        decode_message(msg.message), address, account="ETH", path=path, verify=False
     )
 
     signature = secp256k1.sign(

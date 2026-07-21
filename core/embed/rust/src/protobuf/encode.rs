@@ -2,15 +2,7 @@ use core::convert::{TryFrom, TryInto};
 
 use crate::{
     error::Error,
-    micropython::{
-        buffer::{Buffer, BufferMut},
-        gc::Gc,
-        iter::{Iter, IterBuf},
-        list::List,
-        obj::Obj,
-        qstr::Qstr,
-        util,
-    },
+    micropython::{buffer, gc::Gc, iter::IterBuf, list::List, obj::Obj, qstr::Qstr, util},
 };
 
 use super::{
@@ -20,7 +12,6 @@ use super::{
     zigzag,
 };
 
-#[no_mangle]
 pub extern "C" fn protobuf_len(obj: Obj) -> Obj {
     let block = || {
         let obj = Gc::<MsgObj>::try_from(obj)?;
@@ -31,15 +22,17 @@ pub extern "C" fn protobuf_len(obj: Obj) -> Obj {
     unsafe { util::try_or_raise(block) }
 }
 
-#[no_mangle]
 pub extern "C" fn protobuf_encode(buf: Obj, obj: Obj) -> Obj {
     let block = || {
         let obj = Gc::<MsgObj>::try_from(obj)?;
 
-        // We assume there are no other refs into `buf` at this point. This specifically
-        // means that no fields of `obj` should reference `buf` memory.
-        let buf = &mut BufferMut::try_from(buf)?;
-        let stream = &mut BufferStream::new(buf.as_mut());
+        // SAFETY:
+        // We assume that:
+        //  - there are no other refs into `buf` at this point. This specifically means
+        //    that no fields of `obj` should reference `buf` memory.
+        //  - for the lifetime of `buf`, no Python code will mutate the contents.
+        let buf = unsafe { buffer::get_buffer_mut(buf)? };
+        let stream = &mut BufferStream::new(buf);
 
         Encoder.encode_message(stream, &obj.def(), &obj)?;
 
@@ -77,9 +70,7 @@ impl Encoder {
             };
 
             if field.is_repeated() {
-                let mut iter_buf = IterBuf::new();
-                let iter = Iter::try_from_obj_with_buf(field_value, &mut iter_buf)?;
-                for iter_value in iter {
+                for iter_value in IterBuf::new().try_iterate(field_value)? {
                     stream.write_uvarint(field_key)?;
                     self.encode_field(stream, field, iter_value)?;
                 }
@@ -123,24 +114,25 @@ impl Encoder {
 
                     // Serialize the total length of the buffer.
                     let mut len = 0;
-                    let iter = Iter::try_from_obj_with_buf(value, &mut iter_buf)?;
-                    for value in iter {
-                        let buffer = Buffer::try_from(value)?;
+                    for value in iter_buf.try_iterate(value)? {
+                        // SAFETY: buffer is dropped immediately.
+                        let buffer = unsafe { buffer::get_buffer(value) }?;
                         len += buffer.len();
                     }
                     stream.write_uvarint(len as u64)?;
 
                     // Serialize the buffers one-by-one.
-                    let iter = Iter::try_from_obj_with_buf(value, &mut iter_buf)?;
-                    for value in iter {
-                        let buffer = Buffer::try_from(value)?;
-                        stream.write(&buffer)?;
+                    for value in iter_buf.try_iterate(value)? {
+                        // SAFETY: buffer is dropped immediately.
+                        let buffer = unsafe { buffer::get_buffer(value) }?;
+                        stream.write(buffer)?;
                     }
                 } else {
                     // Single length-delimited field.
-                    let buffer = Buffer::try_from(value)?;
+                    // SAFETY: buffer is dropped immediately.
+                    let buffer = unsafe { buffer::get_buffer(value) }?;
                     stream.write_uvarint(buffer.len() as u64)?;
-                    stream.write(&buffer)?;
+                    stream.write(buffer)?;
                 }
             }
             FieldType::Msg(msg_type) => {

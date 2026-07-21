@@ -1,8 +1,9 @@
 from typing import *
+from buffer_types import *
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-shamir.h
-def interpolate(shares: list[tuple[int, bytes]], x: int) -> bytes:
+# upymod/modtrezorcrypto/modtrezorcrypto-shamir.h
+def interpolate(shares: Sequence[tuple[int, AnyBytes]], x: int) -> bytes:
     """
     Returns f(x) given the Shamir shares (x_1, f(x_1)), ... , (x_k, f(x_k)).
     :param shares: The Shamir shares.

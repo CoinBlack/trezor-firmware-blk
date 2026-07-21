@@ -1,18 +1,17 @@
 from typing import TYPE_CHECKING
 
-from trezor.messages import NEMProvisionNamespace, NEMTransactionCommon
-
-from . import layout, serialize
-
 if TYPE_CHECKING:
-    from trezor.wire import Context
+    from buffer_types import AnyBytes
+
+    from trezor.messages import NEMProvisionNamespace, NEMTransactionCommon
 
 
 async def namespace(
-    ctx: Context,
-    public_key: bytes,
+    public_key: AnyBytes,
     common: NEMTransactionCommon,
     namespace: NEMProvisionNamespace,
-) -> bytes:
-    await layout.ask_provision_namespace(ctx, common, namespace)
+) -> bytearray:
+    from . import layout, serialize
+
+    await layout.ask_provision_namespace(common, namespace)
     return serialize.serialize_provision_namespace(common, namespace, public_key)

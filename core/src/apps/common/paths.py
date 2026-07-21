@@ -2,34 +2,25 @@ from micropython import const
 from typing import TYPE_CHECKING
 
 HARDENED = const(0x8000_0000)
+SLIP25_PURPOSE = const(10025 | HARDENED)
 
 if TYPE_CHECKING:
-    from typing import (
-        Any,
-        Callable,
-        Collection,
-        Container,
-        Iterable,
-        Sequence,
-        TypeVar,
-    )
-    from typing_extensions import Protocol
-    from trezor import wire
+    from buffer_types import AnyBytes
+    from typing import Any, Callable, Collection, Container, Iterable, Sequence, TypeVar
 
-    Bip32Path = Sequence[int]
-    Slip21Path = Sequence[bytes]
+    from typing_extensions import Protocol
+
+    Bip32Path = list[int]
+    Slip21Path = Sequence[AnyBytes]
     PathType = TypeVar("PathType", Bip32Path, Slip21Path, contravariant=True)
 
     class PathSchemaType(Protocol):
-        def match(self, path: Bip32Path) -> bool:
-            ...
+        def match(self, path: Bip32Path) -> bool: ...
 
     class KeychainValidatorType(Protocol):
-        def is_in_keychain(self, path: Bip32Path) -> bool:
-            ...
+        def is_in_keychain(self, path: Bip32Path) -> bool: ...
 
-        def verify_path(self, path: Bip32Path) -> None:
-            ...
+        def verify_path(self, path: Bip32Path) -> None: ...
 
 
 class Interval:
@@ -196,23 +187,24 @@ class PathSchema:
 
             # optionally replace a keyword
             component = cls.REPLACEMENTS.get(component, component)
+            append = schema.append  # local_cache_attribute
 
             if "-" in component:
                 # parse as a range
                 a, b = [parse(s) for s in component.split("-", 1)]
-                schema.append(Interval(a, b))
+                append(Interval(a, b))
 
             elif "," in component:
                 # parse as a list of values
-                schema.append(set(parse(s) for s in component.split(",")))
+                append(set(parse(s) for s in component.split(",")))
 
             elif component == "coin_type":
                 # substitute SLIP-44 ids
-                schema.append(set(parse(s) for s in slip44_id))
+                append(set(parse(s) for s in slip44_id))
 
             else:
                 # plain constant
-                schema.append((parse(component),))
+                append((parse(component),))
 
         return cls(schema, trailing_components, compact=True)
 
@@ -246,40 +238,74 @@ class PathSchema:
 
         return True
 
+    def set_never_matching(self) -> None:
+        """Sets the schema to never match any paths."""
+        self.schema = []
+        self.trailing_components = self._EMPTY_TUPLE
+
+    def restrict(self, path: Bip32Path) -> bool:
+        """
+        Restricts the schema to patterns that are prefixed by the specified
+        path. If the restriction results in a never-matching schema, then False
+        is returned.
+        """
+        schema = self.schema  # local_cache_attribute
+
+        for i, value in enumerate(path):
+            if i < len(schema):
+                # Ensure that the path is a prefix of the schema.
+                if value not in schema[i]:
+                    self.set_never_matching()
+                    return False
+
+                # Restrict the schema component if there are multiple choices.
+                component = schema[i]
+                if not isinstance(component, tuple) or len(component) != 1:
+                    schema[i] = (value,)
+            else:
+                # The path is longer than the schema. We need to restrict the
+                # trailing components.
+
+                if value not in self.trailing_components:
+                    self.set_never_matching()
+                    return False
+
+                schema.append((value,))
+
+        return True
+
     if __debug__:
 
         def __repr__(self) -> str:
             components = ["m"]
-
-            def unharden(item: int) -> int:
-                return item ^ (item & HARDENED)
+            append = components.append  # local_cache_attribute
 
             for component in self.schema:
                 if isinstance(component, Interval):
                     a, b = component.min, component.max
                     prime = "'" if a & HARDENED else ""
-                    components.append(f"[{unharden(a)}-{unharden(b)}]{prime}")
+                    append(f"[{unharden(a)}-{unharden(b)}]{prime}")
                 else:
                     # typechecker thinks component is a Contanier but we're using it
                     # as a Collection.
                     # Which in practice it is, the only non-Collection is Interval.
                     # But we're not going to introduce an additional type requirement
                     # for the sake of __repr__ that doesn't exist in production anyway
-                    collection: Collection[int] = component  # type: ignore [Expression of type "Container[int]" cannot be assigned to declared type "Collection[int]"]
+                    collection: Collection[int] = component  # type: ignore [Type "Container[int]" is not assignable to declared type "Collection[int]"]
                     component_str = ",".join(str(unharden(i)) for i in collection)
                     if len(collection) > 1:
                         component_str = "[" + component_str + "]"
                     if next(iter(collection)) & HARDENED:
                         component_str += "'"
-                    components.append(component_str)
+                    append(component_str)
 
             if self.trailing_components:
                 for key, val in self.WILDCARD_RANGES.items():
                     if self.trailing_components is val:
-                        components.append(key)
+                        append(key)
                         break
                 else:
-                    components.append("???")
+                    append("???")
 
             return "<schema:" + "/".join(components) + ">"
 
@@ -290,12 +316,6 @@ class AlwaysMatchingSchema:
         return True
 
 
-class NeverMatchingSchema:
-    @staticmethod
-    def match(path: Bip32Path) -> bool:
-        return False
-
-
 # BIP-44 for basic (legacy) Bitcoin accounts, and widely used for other currencies:
 # https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki
 PATTERN_BIP44 = "m/44'/coin_type'/account'/change/address_index"
@@ -304,23 +324,27 @@ PATTERN_BIP44_PUBKEY = "m/44'/coin_type'/account'/*"
 # SEP-0005 for non-UTXO-based currencies, defined by Stellar:
 # https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0005.md
 PATTERN_SEP5 = "m/44'/coin_type'/account'"
+# SEP-0005 Ledger Live legacy path
+# https://github.com/trezor/trezor-firmware/issues/1749
+PATTERN_SEP5_LEDGER_LIVE_LEGACY = "m/44'/coin_type'/0'/account"
+
+PATTERN_CASA = "m/45'/coin_type/account/change/address_index"
 
 
 async def validate_path(
-    ctx: wire.Context,
     keychain: KeychainValidatorType,
     path: Bip32Path,
     *additional_checks: bool,
 ) -> None:
     keychain.verify_path(path)
     if not keychain.is_in_keychain(path) or not all(additional_checks):
-        await show_path_warning(ctx, path)
+        await show_path_warning(path)
 
 
-async def show_path_warning(ctx: wire.Context, path: Bip32Path) -> None:
+async def show_path_warning(path: Bip32Path) -> None:
     from trezor.ui.layouts import confirm_path_warning
 
-    await confirm_path_warning(ctx, address_n_to_str(path))
+    await confirm_path_warning(address_n_to_str(path))
 
 
 def is_hardened(i: int) -> bool:
@@ -332,7 +356,7 @@ def path_is_hardened(address_n: Bip32Path) -> bool:
 
 
 def address_n_to_str(address_n: Iterable[int]) -> str:
-    def path_item(i: int) -> str:
+    def _path_item(i: int) -> str:
         if i & HARDENED:
             return str(i ^ HARDENED) + "'"
         else:
@@ -341,4 +365,76 @@ def address_n_to_str(address_n: Iterable[int]) -> str:
     if not address_n:
         return "m"
 
-    return "m/" + "/".join(path_item(i) for i in address_n)
+    return "m/" + "/".join(_path_item(i) for i in address_n)
+
+
+def address_n_slip21_to_str(address_n: Slip21Path) -> str:
+    if not address_n:
+        return "m"
+
+    def label_to_str(label: AnyBytes) -> str:
+        out = []
+        for b in label:
+            if b == ord("\\"):
+                # Escape \ as \\
+                out.append("\\\\")
+            elif b == ord("/"):
+                # Escape / as \/
+                out.append("\\/")
+            elif 32 <= b <= 126:
+                out.append(chr(b))
+            else:
+                # Display non-ASCII-printable bytes as \xNN
+                out.append(f"\\x{b:02x}")
+        return "".join(out)
+
+    return "m/" + "/".join(label_to_str(label) for label in address_n)
+
+
+def unharden(item: int) -> int:
+    return item ^ (item & HARDENED)
+
+
+def get_account_name(
+    coin: str, address_n: Bip32Path, pattern: str | Sequence[str], slip44_id: int
+) -> str | None:
+    from trezor.strings import format_amount_unit
+
+    account_num = _get_account_num(address_n, pattern, slip44_id)
+    if account_num is None:
+        return None
+    return format_amount_unit(coin, f"#{account_num}")
+
+
+def _get_account_num(
+    address_n: Bip32Path, pattern: str | Sequence[str], slip44_id: int
+) -> int | None:
+    if isinstance(pattern, str):
+        pattern = [pattern]
+
+    # Trying all possible patterns - at least one should match
+    for patt in pattern:
+        try:
+            return _get_account_num_single(address_n, patt, slip44_id)
+        except ValueError:
+            pass
+
+    # This function should not raise
+    return None
+
+
+def _get_account_num_single(address_n: Bip32Path, pattern: str, slip44_id: int) -> int:
+    # Validating address_n is compatible with pattern
+    if not PathSchema.parse(pattern, slip44_id).match(address_n):
+        raise ValueError
+
+    account_pos = pattern.find("/account")
+    if account_pos >= 0:
+        i = pattern.count("/", 0, account_pos)
+        num = address_n[i]
+        if is_hardened(num):
+            return unharden(num) + 1
+        else:
+            return num + 1
+    else:
+        raise ValueError

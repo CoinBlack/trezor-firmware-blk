@@ -23,9 +23,25 @@
 #ifndef __OPTIONS_H__
 #define __OPTIONS_H__
 
+#ifndef OPTIMIZE_SIZE
+#define OPTIMIZE_SIZE 1
+#endif
+
+#ifndef OPTIMIZE_SIZE_BLAKE2S
+#define OPTIMIZE_SIZE_BLAKE2S 0
+#endif
+
+#ifndef OPTIMIZE_SIZE_BLAKE2B
+#define OPTIMIZE_SIZE_BLAKE2B OPTIMIZE_SIZE
+#endif
+
+#ifndef OPTIMIZE_SIZE_ED25519
+#define OPTIMIZE_SIZE_ED25519 OPTIMIZE_SIZE
+#endif
+
 // use precomputed Curve Points (some scalar multiples of curve base point G)
 #ifndef USE_PRECOMPUTED_CP
-#define USE_PRECOMPUTED_CP 1
+#define USE_PRECOMPUTED_CP 0
 #endif
 
 // use fast inverse method
@@ -66,11 +82,6 @@
 #define USE_ETHEREUM 0
 #endif
 
-// support Graphene operations (STEEM, BitShares)
-#ifndef USE_GRAPHENE
-#define USE_GRAPHENE 0
-#endif
-
 // support NEM operations
 #ifndef USE_NEM
 #define USE_NEM 0
@@ -94,6 +105,16 @@
 // add way how to mark confidential data
 #ifndef CONFIDENTIAL
 #define CONFIDENTIAL
+#endif
+
+// add way how to mark local confidential data in functions
+#ifndef LOCAL_CONFIDENTIAL
+#define LOCAL_CONFIDENTIAL
+#endif
+
+// add way to mark functions whose return value should always be checked
+#ifndef __wur
+#define __wur __attribute__((warn_unused_result))
 #endif
 
 #endif

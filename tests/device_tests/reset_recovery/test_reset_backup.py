@@ -15,158 +15,50 @@
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
 
-from unittest import mock
-
 import pytest
 from shamir_mnemonic import shamir
 
-from trezorlib import device, messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client
-from trezorlib.messages import BackupType, ButtonRequestType as B
+from trezorlib import device
+from trezorlib.debuglink import DebugSession as Session
+from trezorlib.messages import BackupAvailability, BackupType
 
-from ...common import EXTERNAL_ENTROPY, click_through, read_and_confirm_mnemonic
-
-
-def backup_flow_bip39(client: Client):
-    mnemonic = None
-
-    def input_flow():
-        nonlocal mnemonic
-
-        # 1. Confirm Reset
-        yield from click_through(client.debug, screens=1, code=B.ResetDevice)
-
-        # mnemonic phrases
-        mnemonic = yield from read_and_confirm_mnemonic(client.debug)
-
-        # confirm recovery seed check
-        br = yield
-        assert br.code == B.Success
-        client.debug.press_yes()
-
-        # confirm success
-        br = yield
-        assert br.code == B.Success
-        client.debug.press_yes()
-
-    with client:
-        client.set_expected_responses(
-            [
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.Success),
-                messages.Success,
-                messages.Features,
-            ]
-        )
-        client.set_input_flow(input_flow)
-        device.backup(client)
-
-    return mnemonic.encode()
+from ...common import MOCK_GET_ENTROPY
+from ...input_flows import (
+    InputFlowBip39Backup,
+    InputFlowResetSkipBackup,
+    InputFlowSlip39AdvancedBackup,
+    InputFlowSlip39BasicBackup,
+)
 
 
-def backup_flow_slip39_basic(client: Client):
-    mnemonics = []
+def backup_flow_bip39(session: Session) -> bytes:
+    with session.test_ctx as client:
+        IF = InputFlowBip39Backup(client)
+        client.set_input_flow(IF.get())
+        device.backup(session)
 
-    def input_flow():
-        # 1. Checklist
-        # 2. Number of shares (5)
-        # 3. Checklist
-        # 4. Threshold (3)
-        # 5. Checklist
-        # 6. Confirm show seeds
-        yield from click_through(client.debug, screens=6, code=B.ResetDevice)
+    assert IF.mnemonic is not None
+    return IF.mnemonic.encode()
 
-        # Mnemonic phrases
-        for _ in range(5):
-            # Phrase screen
-            mnemonic = yield from read_and_confirm_mnemonic(client.debug)
-            mnemonics.append(mnemonic)
-            yield  # Confirm continue to next
-            client.debug.press_yes()
 
-        # Confirm backup
-        yield
-        client.debug.press_yes()
+def backup_flow_slip39_basic(session: Session):
+    with session.test_ctx as client:
+        IF = InputFlowSlip39BasicBackup(client, False)
+        client.set_input_flow(IF.get())
+        device.backup(session)
 
-    with client:
-        client.set_input_flow(input_flow)
-        client.set_expected_responses(
-            [messages.ButtonRequest(code=B.ResetDevice)] * 6  # intro screens
-            + [
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-            ]
-            * 5  # individual shares
-            + [
-                messages.ButtonRequest(code=B.Success),
-                messages.Success,
-                messages.Features,
-            ]
-        )
-        device.backup(client)
-
-    groups = shamir.decode_mnemonics(mnemonics[:3])
+    groups = shamir.decode_mnemonics(IF.mnemonics[:3])
     ems = shamir.recover_ems(groups)
     return ems.ciphertext
 
 
-def backup_flow_slip39_advanced(client: Client):
-    mnemonics = []
+def backup_flow_slip39_advanced(session: Session):
+    with session.test_ctx as client:
+        IF = InputFlowSlip39AdvancedBackup(client, False)
+        client.set_input_flow(IF.get())
+        device.backup(session)
 
-    def input_flow():
-        # 1. Confirm Reset
-        # 2. shares info
-        # 3. Set & Confirm number of groups
-        # 4. threshold info
-        # 5. Set & confirm group threshold value
-        # 6-15: for each of 5 groups:
-        #   1. Set & Confirm number of shares
-        #   2. Set & confirm share threshold value
-        # 16. Confirm show seeds
-        yield from click_through(client.debug, screens=16, code=B.ResetDevice)
-
-        # show & confirm shares for all groups
-        for _ in range(5):
-            for _ in range(5):
-                # mnemonic phrases
-                mnemonic = yield from read_and_confirm_mnemonic(client.debug)
-                mnemonics.append(mnemonic)
-
-                # Confirm continue to next share
-                br = yield
-                assert br.code == B.Success
-                client.debug.press_yes()
-
-        # safety warning
-        br = yield
-        assert br.code == B.Success
-        client.debug.press_yes()
-
-    with client:
-        client.set_input_flow(input_flow)
-        client.set_expected_responses(
-            [messages.ButtonRequest(code=B.ResetDevice)] * 6  # intro screens
-            + [
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-            ]
-            * 5  # group thresholds
-            + [
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-            ]
-            * 25  # individual shares
-            + [
-                messages.ButtonRequest(code=B.Success),
-                messages.Success,
-                messages.Features,
-            ]
-        )
-        device.backup(client)
-
-    mnemonics = mnemonics[0:3] + mnemonics[5:8] + mnemonics[10:13]
+    mnemonics = IF.mnemonics[0:3] + IF.mnemonics[5:8] + IF.mnemonics[10:13]
     groups = shamir.decode_mnemonics(mnemonics)
     ems = shamir.recover_ems(groups)
     return ems.ciphertext
@@ -174,95 +66,80 @@ def backup_flow_slip39_advanced(client: Client):
 
 VECTORS = [
     (BackupType.Bip39, backup_flow_bip39),
-    (BackupType.Slip39_Basic, backup_flow_slip39_basic),
-    (BackupType.Slip39_Advanced, backup_flow_slip39_advanced),
+    (BackupType.Slip39_Basic_Extendable, backup_flow_slip39_basic),
+    (BackupType.Slip39_Advanced_Extendable, backup_flow_slip39_advanced),
 ]
 
 
-@pytest.mark.skip_t1
+@pytest.mark.models("core")
 @pytest.mark.parametrize("backup_type, backup_flow", VECTORS)
 @pytest.mark.setup_client(uninitialized=True)
-def test_skip_backup_msg(client: Client, backup_type, backup_flow):
+def test_skip_backup_msg(session: Session, backup_type, backup_flow):
+    assert session.features.initialized is False
 
-    os_urandom = mock.Mock(return_value=EXTERNAL_ENTROPY)
-    with mock.patch("os.urandom", os_urandom), client:
-        device.reset(
-            client,
+    with session.test_ctx:
+        device.setup(
+            session,
             skip_backup=True,
             passphrase_protection=False,
             pin_protection=False,
             backup_type=backup_type,
+            entropy_check_count=0,
+            _get_entropy=MOCK_GET_ENTROPY,
         )
 
-    assert client.features.initialized is True
-    assert client.features.needs_backup is True
-    assert client.features.unfinished_backup is False
-    assert client.features.no_backup is False
-    assert client.features.backup_type is backup_type
+    assert session.features.initialized is True
+    assert session.features.backup_availability == BackupAvailability.Required
+    assert session.features.unfinished_backup is False
+    assert session.features.no_backup is False
+    assert session.features.backup_type is backup_type
 
-    secret = backup_flow(client)
+    secret = backup_flow(session)
 
-    client.init_device()
-    assert client.features.initialized is True
-    assert client.features.needs_backup is False
-    assert client.features.unfinished_backup is False
-    assert client.features.backup_type is backup_type
+    assert session.features.initialized is True
+    assert session.features.backup_availability == BackupAvailability.NotAvailable
+    assert session.features.unfinished_backup is False
+    assert session.features.backup_type is backup_type
 
     assert secret is not None
-    state = client.debug.state()
+    state = session.debug.state()
     assert state.mnemonic_type is backup_type
     assert state.mnemonic_secret == secret
 
 
-@pytest.mark.skip_t1
+@pytest.mark.models("core")
 @pytest.mark.parametrize("backup_type, backup_flow", VECTORS)
 @pytest.mark.setup_client(uninitialized=True)
-def test_skip_backup_manual(client: Client, backup_type, backup_flow):
-    def reset_skip_input_flow():
-        yield  # Confirm Recovery
-        client.debug.press_yes()
+def test_skip_backup_manual(session: Session, backup_type: BackupType, backup_flow):
+    assert session.features.initialized is False
 
-        yield  # Skip Backup
-        client.debug.press_no()
-
-        yield  # Confirm skip backup
-        client.debug.press_no()
-
-    os_urandom = mock.Mock(return_value=EXTERNAL_ENTROPY)
-    with mock.patch("os.urandom", os_urandom), client:
-        client.set_input_flow(reset_skip_input_flow)
-        client.set_expected_responses(
-            [
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.EntropyRequest(),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.Success,
-                messages.Features,
-            ]
-        )
-        device.reset(
-            client,
+    with session.test_ctx as client:
+        IF = InputFlowResetSkipBackup(client)
+        client.set_input_flow(IF.get())
+        device.setup(
+            session,
             pin_protection=False,
             passphrase_protection=False,
             backup_type=backup_type,
+            entropy_check_count=0,
+            _get_entropy=MOCK_GET_ENTROPY,
         )
 
-    assert client.features.initialized is True
-    assert client.features.needs_backup is True
-    assert client.features.unfinished_backup is False
-    assert client.features.no_backup is False
-    assert client.features.backup_type is backup_type
+    assert session.features.initialized is True
+    assert session.features.backup_availability == BackupAvailability.Required
+    assert session.features.unfinished_backup is False
+    assert session.features.no_backup is False
+    assert session.features.backup_type is backup_type
 
-    secret = backup_flow(client)
+    secret = backup_flow(session)
 
-    client.init_device()
-    assert client.features.initialized is True
-    assert client.features.needs_backup is False
-    assert client.features.unfinished_backup is False
-    assert client.features.backup_type is backup_type
+    session.refresh_features()
+    assert session.features.initialized is True
+    assert session.features.backup_availability == BackupAvailability.NotAvailable
+    assert session.features.unfinished_backup is False
+    assert session.features.backup_type is backup_type
 
     assert secret is not None
-    state = client.debug.state()
+    state = session.debug.state()
     assert state.mnemonic_type is backup_type
     assert state.mnemonic_secret == secret

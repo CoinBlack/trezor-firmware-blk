@@ -27,25 +27,28 @@ on one page here.
 
   Options:
     -p, --path TEXT           Select device by specific path.
+    -B, --ble / --no-ble      Enable/disable support for Bluetooth Low Energy.
     -v, --verbose             Show communication messages.
     -j, --json                Print result as JSON object
     -P, --passphrase-on-host  Enter passphrase on host.
     -S, --script              Use UI for usage in scripts.
-    -s, --session-id HEX      Resume given session ID.
+    -s, --session-id DATA     Resume given session.
+    -r, --record DIRECTORY    Record screen changes into a specified directory.
     --version                 Show the version and exit.
     --help                    Show this message and exit.
 
   Commands:
-    binance            Binance Chain commands.
+    benchmark          Benchmark commands.
+    ble                BLE commands.
     btc                Bitcoin and Bitcoin-like coins commands.
     cardano            Cardano commands.
-    clear-session      Clear session (remove cached PIN, passphrase, etc.).
-    cosi               CoSi (Cothority / collective signing) commands.
+    clear-session      Clear current session and lock the device.
     crypto             Miscellaneous cryptography features.
     debug              Miscellaneous debug features.
     device             Device management commands - setup, recover seed, wipe, etc.
     eos                EOS commands.
     ethereum           Ethereum commands.
+    evolu              Evolu commands.
     fido               FIDO2, U2F and WebAuthN management commands.
     firmware           Firmware commands.
     get-features       Retrieve device features and settings.
@@ -53,35 +56,58 @@ on one page here.
     list               List connected Trezor devices.
     monero             Monero commands.
     nem                NEM commands.
+    nostr              Nostr commands.
     ping               Send ping message.
     ripple             Ripple commands.
     set                Device settings.
+    solana             Solana commands.
     stellar            Stellar commands.
+    telemetry          Telemetry commands.
     tezos              Tezos commands.
+    tron               Tron commands.
     usb-reset          Perform USB reset on stuck devices.
     version            Show version of trezorctl/trezorlib.
     wait-for-emulator  Wait until Trezor Emulator comes up.
 
-Binance Chain commands.
-~~~~~~~~~~~~~~~~~~~~~~~
+Benchmark commands.
+~~~~~~~~~~~~~~~~~~~
 
 .. code::
 
-  trezorctl binance --help
+  trezorctl benchmark --help
 
 .. code::
 
-  Usage: trezorctl binance [OPTIONS] COMMAND [ARGS]...
+  Usage: trezorctl benchmark [OPTIONS] COMMAND [ARGS]...
 
-    Binance Chain commands.
+    Benchmark commands.
 
   Options:
     --help  Show this message and exit.
 
   Commands:
-    get-address     Get Binance address for specified path.
-    get-public-key  Get Binance public key.
-    sign-tx         Sign Binance transaction.
+    list-names  List names of all supported benchmarks
+    run         Run benchmark
+
+BLE commands.
+~~~~~~~~~~~~~
+
+.. code::
+
+  trezorctl ble --help
+
+.. code::
+
+  Usage: trezorctl ble [OPTIONS] COMMAND [ARGS]...
+
+    BLE commands.
+
+  Options:
+    --help  Show this message and exit.
+
+  Commands:
+    connect  Connect to the device via BLE.
+    unpair   Erase bond of currently connected device, or all devices (on device side).
 
 Bitcoin and Bitcoin-like coins commands.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -127,27 +153,8 @@ Cardano commands.
     get-address             Get Cardano address.
     get-native-script-hash  Get Cardano native script hash.
     get-public-key          Get Cardano public key.
+    sign-message            Sign Cardano message containing arbitrary data.
     sign-tx                 Sign Cardano transaction.
-
-CoSi (Cothority / collective signing) commands.
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code::
-
-  trezorctl cosi --help
-
-.. code::
-
-  Usage: trezorctl cosi [OPTIONS] COMMAND [ARGS]...
-
-    CoSi (Cothority / collective signing) commands.
-
-  Options:
-    --help  Show this message and exit.
-
-  Commands:
-    commit  Ask device to commit to CoSi signing.
-    sign    Ask device to sign using CoSi.
 
 Miscellaneous cryptography features.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -187,7 +194,10 @@ Miscellaneous debug features.
     --help  Show this message and exit.
 
   Commands:
-    send-bytes  Send raw bytes to Trezor.
+    optiga-set-sec-max  Set Optiga's security event counter to maximum.
+    prodtest-t1         Perform a prodtest on Model One.
+    record              Record screen changes into a specified directory.
+    set-log-filter      Set logging filter string.
 
 Device management commands - setup, recover seed, wipe, etc.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -206,13 +216,18 @@ Device management commands - setup, recover seed, wipe, etc.
     --help  Show this message and exit.
 
   Commands:
+    authenticate          Verify the authenticity of the device.
     backup                Perform device seed backup.
+    forget                Forget a THP pairing key.
     load                  Upload seed and custom configuration to the device.
     reboot-to-bootloader  Reboot device into bootloader mode.
     recover               Start safe recovery workflow.
     sd-protect            Secure the device with SD card protection.
-    self-test             Perform a factory self-test.
+    serial-number         Get serial number.
+    set-busy              Show a "Do not disconnect" dialog.
     setup                 Perform device setup and generate new seed.
+    tutorial              Show on-device tutorial.
+    unlock-bootloader     Unlocks bootloader.
     wipe                  Reset device to factory defaults and remove all private data.
 
 EOS commands.
@@ -248,8 +263,26 @@ Ethereum commands.
 
     Ethereum commands.
 
+    Most Ethereum commands now require the host to specify definition of a network and possibly an
+    ERC-20 token. These definitions can be automatically fetched using the `-a` option.
+
+    You can also specify a custom definition source using the `-d` option. Allowable values are:
+
+    - HTTP or HTTPS URL
+    - path to local directory
+    - path to local tar archive
+    
+
+    For debugging purposes, it is possible to force use a specific network and token definition by
+    using the `--network` and `--token` options. These options accept either a path to a file with a
+    binary blob, or a hex-encoded string.
+
   Options:
-    --help  Show this message and exit.
+    -d, --definitions TEXT  Source for Ethereum definition blobs.
+    -a, --auto-definitions  Automatically download required definitions from trezor.io
+    --network TEXT          Network definition blob.
+    --token TEXT            Token definition blob.
+    --help                  Show this message and exit.
 
   Commands:
     get-address           Get Ethereum address in hex encoding.
@@ -259,6 +292,27 @@ Ethereum commands.
     sign-typed-data       Sign typed data (EIP-712) with Ethereum address.
     sign-typed-data-hash  Sign hash of typed data (EIP-712) with Ethereum address.
     verify-message        Verify message signed with Ethereum address.
+
+Evolu commands.
+~~~~~~~~~~~~~~~
+
+.. code::
+
+  trezorctl evolu --help
+
+.. code::
+
+  Usage: trezorctl evolu [OPTIONS] COMMAND [ARGS]...
+
+    Evolu commands. Evolu is a local first storage framework. See https://github.com/evoluhq/evolu
+
+  Options:
+    --help  Show this message and exit.
+
+  Commands:
+    get-delegated-identity-key  Request the delegated identity key of this device.
+    get-node                    Return the SLIP-21 node for Evolu.
+    sign-registration-request   Sign a registration request for this device to be registered at...
 
 FIDO2, U2F and WebAuthN management commands.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -298,7 +352,6 @@ Firmware commands.
 
   Commands:
     download  Download and save the firmware image.
-    extract   Extract the firmware from the device.
     get-hash  Get a hash of the installed firmware combined with the optional challenge.
     update    Upload new firmware to device.
     verify    Verify the integrity of the firmware data stored in a file.
@@ -343,6 +396,26 @@ NEM commands.
     get-address  Get NEM address for specified path.
     sign-tx      Sign (and optionally broadcast) NEM transaction.
 
+Nostr commands.
+~~~~~~~~~~~~~~~
+
+.. code::
+
+  trezorctl nostr --help
+
+.. code::
+
+  Usage: trezorctl nostr [OPTIONS] COMMAND [ARGS]...
+
+    Nostr commands.
+
+  Options:
+    --help  Show this message and exit.
+
+  Commands:
+    get-pubkey  Return the pubkey derived by the given path.
+    sign-event  Sign an event using the key derived by the given path.
+
 Ripple commands.
 ~~~~~~~~~~~~~~~~
 
@@ -381,15 +454,39 @@ Device settings.
 
   Commands:
     auto-lock-delay        Set auto-lock delay (in seconds).
+    brightness             Set display brightness.
     display-rotation       Set display rotation.
     experimental-features  Enable or disable experimental message types.
     flags                  Set device flags.
+    haptic-feedback        Enable or disable haptic feedback.
     homescreen             Set new homescreen.
     label                  Set new device label.
+    language               Set new language with translations.
     passphrase             Enable, disable or configure passphrase protection.
     pin                    Set, change or remove PIN.
     safety-checks          Set safety check level.
     wipe-code              Set or remove the wipe code.
+
+Solana commands.
+~~~~~~~~~~~~~~~~
+
+.. code::
+
+  trezorctl solana --help
+
+.. code::
+
+  Usage: trezorctl solana [OPTIONS] COMMAND [ARGS]...
+
+    Solana commands.
+
+  Options:
+    --help  Show this message and exit.
+
+  Commands:
+    get-address     Get Solana address.
+    get-public-key  Get Solana public key.
+    sign-tx         Sign Solana transaction.
 
 Stellar commands.
 ~~~~~~~~~~~~~~~~~
@@ -411,6 +508,25 @@ Stellar commands.
     get-address       Get Stellar public address.
     sign-transaction  Sign a base64-encoded transaction envelope.
 
+Telemetry commands.
+~~~~~~~~~~~~~~~~~~~
+
+.. code::
+
+  trezorctl telemetry --help
+
+.. code::
+
+  Usage: trezorctl telemetry [OPTIONS] COMMAND [ARGS]...
+
+    Telemetry commands.
+
+  Options:
+    --help  Show this message and exit.
+
+  Commands:
+    get  Read telemetry data from the device.
+
 Tezos commands.
 ~~~~~~~~~~~~~~~
 
@@ -431,4 +547,24 @@ Tezos commands.
     get-address     Get Tezos address for specified path.
     get-public-key  Get Tezos public key.
     sign-tx         Sign Tezos transaction.
+
+Tron commands.
+~~~~~~~~~~~~~~
+
+.. code::
+
+  trezorctl tron --help
+
+.. code::
+
+  Usage: trezorctl tron [OPTIONS] COMMAND [ARGS]...
+
+    Tron commands.
+
+  Options:
+    --help  Show this message and exit.
+
+  Commands:
+    get-address  Get Tron address
+    sign-tx      Sign a raw transaction.
 

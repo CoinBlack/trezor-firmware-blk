@@ -1,7 +1,8 @@
 from typing import *
+from buffer_types import *
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-aes.h
+# upymod/modtrezorcrypto/modtrezorcrypto-aes.h
 class aes:
     """
     AES context.
@@ -15,25 +16,74 @@ class aes:
     def __init__(
         self,
         mode: int,
-        key: bytes,
-        iv: bytes | None = None,
+        key: AnyBytes,
+        iv: AnyBytes | None = None,
     ) -> None:
         """
         Initialize AES context.
         """
 
-    def encrypt(self, data: bytes) -> bytes:
+    def encrypt(self, data: AnyBytes) -> bytes:
         """
         Encrypt data and update AES context.
         """
 
-    def decrypt(self, data: bytes) -> bytes:
+    def decrypt(self, data: AnyBytes) -> bytes:
         """
         Decrypt data and update AES context.
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-blake256.h
+# upymod/modtrezorcrypto/modtrezorcrypto-aesgcm.h
+class aesgcm:
+    """
+    AES-GCM context.
+    """
+
+    def __init__(self, key: AnyBytes, iv: AnyBytes) -> None:
+        """
+        Initialize the AES-GCM context for encryption or decryption.
+        """
+
+    def reset(self, iv: AnyBytes) -> None:
+        """
+        Reset the IV for encryption or decryption.
+        """
+
+    def encrypt(self, data: AnyBytes) -> bytes:
+        """
+        Encrypt data chunk.
+        """
+
+    def encrypt_in_place(self, data: AnyBuffer) -> int:
+        """
+        Encrypt data chunk in place. Returns the length of the encrypted data.
+        """
+
+    def decrypt(self, data: AnyBytes) -> bytes:
+        """
+        Decrypt data chunk.
+        """
+
+    def decrypt_in_place(self, data: AnyBuffer) -> int:
+        """
+        Decrypt data chunk in place. Returns the length of the decrypted data.
+        """
+
+    def auth(self, data: AnyBytes) -> None:
+        """
+        Include authenticated data chunk in the GCM authentication tag. This can
+        be called repeatedly to add authenticated data at any point before
+        finish().
+        """
+
+    def finish(self) -> bytes:
+        """
+        Compute GCM authentication tag.
+        """
+
+
+# upymod/modtrezorcrypto/modtrezorcrypto-blake256.h
 class blake256:
     """
     Blake256 context.
@@ -41,12 +91,12 @@ class blake256:
     block_size: int
     digest_size: int
 
-    def __init__(self, __data: AnyStr | None = None) -> None:
+    def __init__(self, __data: StrOrBytes | None = None) -> None:
         """
         Creates a hash context object.
         """
 
-    def update(self, __data: AnyStr) -> None:
+    def update(self, __data: StrOrBytes) -> None:
         """
         Update the hash context with hashed data.
         """
@@ -57,7 +107,7 @@ class blake256:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-blake2b.h
+# upymod/modtrezorcrypto/modtrezorcrypto-blake2b.h
 class blake2b:
     """
     Blake2b context.
@@ -67,16 +117,16 @@ class blake2b:
 
     def __init__(
         self,
-        data: bytes | None = None,
+        data: AnyBytes | None = None,
         outlen: int = blake2b.digest_size,
-        key: bytes | None = None,
-        personal: bytes | None = None,
+        key: AnyBytes | None = None,
+        personal: AnyBytes | None = None,
     ) -> None:
         """
         Creates a hash context object.
         """
 
-    def update(self, __data: AnyStr) -> None:
+    def update(self, __data: StrOrBytes) -> None:
         """
         Update the hash context with hashed data.
         """
@@ -87,7 +137,7 @@ class blake2b:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-blake2s.h
+# upymod/modtrezorcrypto/modtrezorcrypto-blake2s.h
 class blake2s:
     """
     Blake2s context.
@@ -97,16 +147,16 @@ class blake2s:
 
     def __init__(
         self,
-        data: bytes | None = None,
+        data: AnyBytes | None = None,
         outlen: int = blake2s.digest_size,
-        key: bytes | None = None,
-        personal: bytes | None = None,
+        key: AnyBytes | None = None,
+        personal: AnyBytes | None = None,
     ) -> None:
         """
         Creates a hash context object.
         """
 
-    def update(self, __data: AnyStr) -> None:
+    def update(self, __data: StrOrBytes) -> None:
         """
         Update the hash context with hashed data.
         """
@@ -117,31 +167,31 @@ class blake2s:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-chacha20poly1305.h
+# upymod/modtrezorcrypto/modtrezorcrypto-chacha20poly1305.h
 class chacha20poly1305:
     """
     ChaCha20Poly1305 context.
     """
 
-    def __init__(self, key: bytes, nonce: bytes) -> None:
+    def __init__(self, key: AnyBytes, nonce: AnyBytes) -> None:
         """
         Initialize the ChaCha20 + Poly1305 context for encryption or decryption
         using a 32 byte key and 12 byte nonce as in the RFC 7539 style.
         """
 
-    def encrypt(self, data: bytes) -> bytes:
+    def encrypt(self, data: AnyBytes) -> bytes:
         """
         Encrypt data (length of data must be divisible by 64 except for the
         final value).
         """
 
-    def decrypt(self, data: bytes) -> bytes:
+    def decrypt(self, data: AnyBytes) -> bytes:
         """
         Decrypt data (length of data must be divisible by 64 except for the
         final value).
         """
 
-    def auth(self, data: bytes) -> None:
+    def auth(self, data: AnyBytes) -> None:
         """
         Include authenticated data in the Poly1305 MAC using the RFC 7539
         style with 16 byte padding. This must only be called once and prior
@@ -154,7 +204,7 @@ class chacha20poly1305:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-groestl.h
+# upymod/modtrezorcrypto/modtrezorcrypto-groestl.h
 class groestl512:
     """
     GROESTL512 context.
@@ -162,12 +212,12 @@ class groestl512:
     block_size: int
     digest_size: int
 
-    def __init__(self, __data: AnyStr | None = None) -> None:
+    def __init__(self, __data: StrOrBytes | None = None) -> None:
         """
         Creates a hash context object.
         """
 
-    def update(self, __data: AnyStr) -> None:
+    def update(self, __data: StrOrBytes) -> None:
         """
         Update the hash context with hashed data.
         """
@@ -178,7 +228,7 @@ class groestl512:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-hmac.h
+# upymod/modtrezorcrypto/modtrezorcrypto-hmac.h
 class hmac:
     """
     HMAC context.
@@ -189,14 +239,14 @@ class hmac:
     def __init__(
         self,
         hashtype: int,
-        key: bytes,
-        message: bytes | None = None,
+        key: AnyBytes,
+        message: AnyBytes | None = None,
     ) -> None:
         """
         Create a HMAC context.
         """
 
-    def update(self, message: bytes) -> None:
+    def update(self, message: AnyBytes) -> None:
         """
         Update a HMAC context.
         """
@@ -207,7 +257,7 @@ class hmac:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-pbkdf2.h
+# upymod/modtrezorcrypto/modtrezorcrypto-pbkdf2.h
 class pbkdf2:
     """
     PBKDF2 context.
@@ -218,8 +268,8 @@ class pbkdf2:
     def __init__(
         self,
         prf: int,
-        password: bytes,
-        salt: bytes,
+        password: AnyBytes,
+        salt: AnyBytes,
         iterations: int | None = None,
         blocknr: int = 1,
     ) -> None:
@@ -238,7 +288,7 @@ class pbkdf2:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-ripemd160.h
+# upymod/modtrezorcrypto/modtrezorcrypto-ripemd160.h
 class ripemd160:
     """
     RIPEMD160 context.
@@ -246,12 +296,12 @@ class ripemd160:
     block_size: int
     digest_size: int
 
-    def __init__(self, __data: AnyStr | None = None) -> None:
+    def __init__(self, __data: StrOrBytes | None = None) -> None:
         """
         Creates a hash context object.
         """
 
-    def update(self, __data: AnyStr) -> None:
+    def update(self, __data: StrOrBytes) -> None:
         """
         Update the hash context with hashed data.
         """
@@ -262,7 +312,7 @@ class ripemd160:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-sha1.h
+# upymod/modtrezorcrypto/modtrezorcrypto-sha1.h
 class sha1:
     """
     SHA1 context.
@@ -270,12 +320,12 @@ class sha1:
     block_size: int
     digest_size: int
 
-    def __init__(self, __data: AnyStr | None = None) -> None:
+    def __init__(self, __data: StrOrBytes | None = None) -> None:
         """
         Creates a hash context object.
         """
 
-    def update(self, __data: AnyStr) -> None:
+    def update(self, __data: StrOrBytes) -> None:
         """
         Update the hash context with hashed data.
         """
@@ -286,7 +336,7 @@ class sha1:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-sha256.h
+# upymod/modtrezorcrypto/modtrezorcrypto-sha256.h
 class sha256:
     """
     SHA256 context.
@@ -294,12 +344,12 @@ class sha256:
     block_size: int
     digest_size: int
 
-    def __init__(self, __data: AnyStr | None = None) -> None:
+    def __init__(self, __data: StrOrBytes | None = None) -> None:
         """
         Creates a hash context object.
         """
 
-    def update(self, __data: AnyStr) -> None:
+    def update(self, __data: StrOrBytes) -> None:
         """
         Update the hash context with hashed data.
         """
@@ -310,7 +360,7 @@ class sha256:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-sha3-256.h
+# upymod/modtrezorcrypto/modtrezorcrypto-sha3-256.h
 class sha3_256:
     """
     SHA3_256 context.
@@ -320,14 +370,14 @@ class sha3_256:
 
     def __init__(
         self,
-        data: bytes | None = None,
+        data: AnyBytes | None = None,
         keccak: bool = False,
     ) -> None:
         """
         Creates a hash context object.
         """
 
-    def update(self, __data: AnyStr) -> None:
+    def update(self, __data: StrOrBytes) -> None:
         """
         Update the hash context with hashed data.
         """
@@ -343,7 +393,7 @@ class sha3_256:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-sha3-512.h
+# upymod/modtrezorcrypto/modtrezorcrypto-sha3-512.h
 class sha3_512:
     """
     SHA3_512 context.
@@ -353,14 +403,14 @@ class sha3_512:
 
     def __init__(
         self,
-        data: bytes | None = None,
+        data: AnyBytes | None = None,
         keccak: bool = False,
     ) -> None:
         """
         Creates a hash context object.
         """
 
-    def update(self, __data: AnyStr) -> None:
+    def update(self, __data: StrOrBytes) -> None:
         """
         Update the hash context with hashed data.
         """
@@ -376,7 +426,7 @@ class sha3_512:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-sha512.h
+# upymod/modtrezorcrypto/modtrezorcrypto-sha512.h
 class sha512:
     """
     SHA512 context.
@@ -384,12 +434,12 @@ class sha512:
     block_size: int
     digest_size: int
 
-    def __init__(self, __data: AnyStr | None = None) -> None:
+    def __init__(self, __data: StrOrBytes | None = None) -> None:
         """
         Creates a hash context object.
         """
 
-    def update(self, __data: AnyStr) -> None:
+    def update(self, __data: StrOrBytes) -> None:
         """
         Update the hash context with hashed data.
         """

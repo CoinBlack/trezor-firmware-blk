@@ -1,43 +1,34 @@
-import gc
-from micropython import const
 from typing import TYPE_CHECKING
 
-from trezor import log
-
-from apps.monero.xmr import crypto
-
 if TYPE_CHECKING:
-    from trezor.wire import Context
-    from apps.monero.xmr.crypto import Point, Scalar
-    from apps.monero.xmr.credentials import AccountCreds
     from trezor.messages import MoneroTransactionDestinationEntry
+
+    from apps.monero.xmr.credentials import AccountCreds
+    from apps.monero.xmr.crypto import Point, Scalar
 
     Subaddresses = dict[bytes, tuple[int, int]]
 
 
 class State:
 
-    STEP_INIT = const(0)
-    STEP_INP = const(100)
-    STEP_VINI = const(300)
-    STEP_ALL_IN = const(350)
-    STEP_OUT = const(400)
-    STEP_ALL_OUT = const(500)
-    STEP_SIGN = const(600)
+    STEP_INIT = 0
+    STEP_INP = 100
+    STEP_VINI = 300
+    STEP_ALL_IN = 350
+    STEP_OUT = 400
+    STEP_ALL_OUT = 500
+    STEP_SIGN = 600
 
-    def __init__(self, ctx: Context) -> None:
+    def __init__(self) -> None:
+        from apps.monero.xmr import crypto
         from apps.monero.xmr.keccak_hasher import KeccakXmrArchive
         from apps.monero.xmr.mlsag_hasher import PreMlsagHasher
 
-        self.ctx = ctx
-
-        """
-        Account credentials
-        type: AccountCreds
-        - view private/public key
-        - spend private/public key
-        - and its corresponding address
-        """
+        # Account credentials
+        # - type: AccountCreds
+        # - view private/public key
+        # - spend private/public key
+        # - and its corresponding address
         self.creds: AccountCreds | None = None
 
         # HMAC/encryption keys used to protect offloaded data
@@ -103,7 +94,6 @@ class State:
         self.rsig_grouping: list[int] | None = []
         # is range proof computing offloaded or not
         self.rsig_offload: bool | None = False
-        self.rsig_is_bp_plus: bool | None = False
 
         # sum of all inputs' pseudo out masks
         self.sumpouts_alphas: Scalar = crypto.Scalar(0)
@@ -141,6 +131,10 @@ class State:
         self.full_message: bytes | None = None
 
     def mem_trace(self, x=None, collect: bool = False) -> None:
+        import gc
+
+        from trezor import log
+
         if __debug__:
             log.debug(
                 __name__,

@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -14,38 +14,57 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from . import messages
-from .tools import expect
+from .tools import workflow
 
 if TYPE_CHECKING:
-    from .client import TrezorClient
+    from .client import Session
     from .tools import Address
-    from .protobuf import MessageType
 
 
-@expect(messages.TezosAddress, field="address", ret_type=str)
-def get_address(
-    client: "TrezorClient", address_n: "Address", show_display: bool = False
-) -> "MessageType":
-    return client.call(
-        messages.TezosGetAddress(address_n=address_n, show_display=show_display)
+def get_address(*args: Any, **kwargs: Any) -> str:
+    return get_authenticated_address(*args, **kwargs).address
+
+
+@workflow(capability=messages.Capability.Tezos)
+def get_authenticated_address(
+    session: "Session",
+    address_n: "Address",
+    show_display: bool = False,
+    chunkify: bool = False,
+) -> messages.TezosAddress:
+    return session.call(
+        messages.TezosGetAddress(
+            address_n=address_n, show_display=show_display, chunkify=chunkify
+        ),
+        expect=messages.TezosAddress,
     )
 
 
-@expect(messages.TezosPublicKey, field="public_key", ret_type=str)
+@workflow(capability=messages.Capability.Tezos)
 def get_public_key(
-    client: "TrezorClient", address_n: "Address", show_display: bool = False
-) -> "MessageType":
-    return client.call(
-        messages.TezosGetPublicKey(address_n=address_n, show_display=show_display)
-    )
+    session: "Session",
+    address_n: "Address",
+    show_display: bool = False,
+    chunkify: bool = False,
+) -> str:
+    return session.call(
+        messages.TezosGetPublicKey(
+            address_n=address_n, show_display=show_display, chunkify=chunkify
+        ),
+        expect=messages.TezosPublicKey,
+    ).public_key
 
 
-@expect(messages.TezosSignedTx)
+@workflow(capability=messages.Capability.Tezos)
 def sign_tx(
-    client: "TrezorClient", address_n: "Address", sign_tx_msg: messages.TezosSignTx
-) -> "MessageType":
+    session: "Session",
+    address_n: "Address",
+    sign_tx_msg: messages.TezosSignTx,
+    chunkify: bool = False,
+) -> messages.TezosSignedTx:
     sign_tx_msg.address_n = address_n
-    return client.call(sign_tx_msg)
+    sign_tx_msg.chunkify = chunkify
+    return session.call(sign_tx_msg, expect=messages.TezosSignedTx)

@@ -1,9 +1,8 @@
 import hypothesis.strategies as st
-from hypothesis import assume, settings
-from hypothesis.stateful import Bundle, RuleBasedStateMachine, invariant, rule
-
 from c0.storage import Storage as StorageC0
 from c.storage import Storage as StorageC
+from hypothesis import assume, settings
+from hypothesis.stateful import Bundle, RuleBasedStateMachine, invariant, rule
 
 from . import common
 from .storage_model import StorageModel
@@ -51,12 +50,14 @@ class StorageUpgrade(RuleBasedStateMachine):
 
     @rule(oldpin=pins, newpin=pins)
     def change_pin(self, oldpin, newpin):
-        assert self.sm.change_pin(oldpin, newpin) == self.sc.change_pin(oldpin, newpin)
+        assert self.sm.change_pin(oldpin=oldpin, newpin=newpin) == self.sc.change_pin(
+            oldpin, newpin
+        )
         self.ensure_unlocked()
 
     @invariant()
     def check_upgrade(self):
-        sc1 = StorageC()
+        sc1 = StorageC("libtrezor-storage.so")
         sc1._set_flash_buffer(self.sc._get_flash_buffer())
         sc1.init(common.test_uid)
         assert self.sm.get_pin_rem() == sc1.get_pin_rem()

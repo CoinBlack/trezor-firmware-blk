@@ -17,9 +17,11 @@
 import pytest
 
 from trezorlib import btc, messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib.debuglink import DebugSession as Session
 from trezorlib.tools import parse_path
 
+from ...common import is_core
+from ...input_flows import InputFlowConfirmAllWarnings
 from .signtx import forge_prevtx
 
 VECTORS = (  # path, script_types
@@ -83,57 +85,81 @@ VECTORS_MULTISIG = (  # paths, address_index
     ),
     # Unchained unhardened m/45'/coin_type/account/[0-1000000]/change/address_index
     (("m/45h/0/63/1000000", "m/45h/0/62/1000000", "m/45h/0/61/1000000"), [0, 255]),
-    # Unchained deprecated m/45'/coin_type'/account'/[0-1000000]/address_index
-    (("m/45h/0h/63h/1000000", "m/45h/0h/62h/1000000", "m/45h/0/61/1000000"), [255]),
+    # Casa Paths
+    (("m/45h/0/60/1", "m/45h/1/60/0", "m/45h/2/60/0"), [255]),
 )
 
 
 # Has AlwaysMatchingSchema but let's make sure the nonstandard paths are
 # accepted in case we make this more restrictive in the future.
 @pytest.mark.parametrize("path, script_types", VECTORS)
-def test_getpublicnode(client: Client, path, script_types):
+def test_getpublicnode(
+    session: Session, path: str, script_types: list[messages.InputScriptType]
+):
     for script_type in script_types:
         res = btc.get_public_node(
-            client, parse_path(path), coin_name="Bitcoin", script_type=script_type
+            session, parse_path(path), coin_name="Bitcoin", script_type=script_type
         )
 
         assert res.xpub
 
 
+@pytest.mark.parametrize("chunkify", (True, False))
 @pytest.mark.parametrize("path, script_types", VECTORS)
-def test_getaddress(client: Client, path, script_types):
+def test_getaddress(
+    session: Session,
+    chunkify: bool,
+    path: str,
+    script_types: list[messages.InputScriptType],
+):
     for script_type in script_types:
-        res = btc.get_address(
-            client,
-            "Bitcoin",
-            parse_path(path),
-            show_display=True,
-            script_type=script_type,
-        )
+        with session.test_ctx as client:
+            if is_core(session):
+                IF = InputFlowConfirmAllWarnings(session)
+                client.set_input_flow(IF.get())
+            res = btc.get_address(
+                session,
+                "Bitcoin",
+                parse_path(path),
+                show_display=True,
+                script_type=script_type,
+                chunkify=chunkify,
+            )
 
-        assert res
+            assert res
 
 
 @pytest.mark.parametrize("path, script_types", VECTORS)
-def test_signmessage(client: Client, path, script_types):
+def test_signmessage(
+    session: Session, path: str, script_types: list[messages.InputScriptType]
+):
     for script_type in script_types:
-        sig = btc.sign_message(
-            client,
-            coin_name="Bitcoin",
-            n=parse_path(path),
-            script_type=script_type,
-            message="This is an example of a signed message.",
-        )
+        with session.test_ctx as client:
+            if is_core(session):
+                IF = InputFlowConfirmAllWarnings(session)
+                client.set_input_flow(IF.get())
 
-        assert sig.signature
+            sig = btc.sign_message(
+                session,
+                coin_name="Bitcoin",
+                n=parse_path(path),
+                script_type=script_type,
+                message="This is an example of a signed message.",
+            )
+
+            assert sig.signature
 
 
 @pytest.mark.parametrize("path, script_types", VECTORS)
-def test_signtx(client: Client, path, script_types):
+def test_signtx(
+    session: Session, path: str, script_types: list[messages.InputScriptType]
+):
     address_n = parse_path(path)
 
     for script_type in script_types:
-        address = btc.get_address(client, "Bitcoin", address_n, script_type=script_type)
+        address = btc.get_address(
+            session, "Bitcoin", address_n, script_type=script_type
+        )
         prevhash, prevtx = forge_prevtx([(address, 390_000)])
         inp1 = messages.TxInputType(
             address_n=address_n,
@@ -149,20 +175,26 @@ def test_signtx(client: Client, path, script_types):
             script_type=messages.OutputScriptType.PAYTOADDRESS,
         )
 
-        _, serialized_tx = btc.sign_tx(
-            client, "Bitcoin", [inp1], [out1], prev_txes={prevhash: prevtx}
-        )
+        with session.test_ctx as client:
+            if is_core(session):
+                IF = InputFlowConfirmAllWarnings(session)
+                client.set_input_flow(IF.get())
+            _, serialized_tx = btc.sign_tx(
+                session, "Bitcoin", [inp1], [out1], prev_txes={prevhash: prevtx}
+            )
 
         assert serialized_tx.hex()
 
 
 @pytest.mark.multisig
 @pytest.mark.parametrize("paths, address_index", VECTORS_MULTISIG)
-def test_getaddress_multisig(client: Client, paths, address_index):
+def test_getaddress_multisig(
+    session: Session, paths: list[str], address_index: list[int]
+):
     pubs = [
         messages.HDNodePathType(
             node=btc.get_public_node(
-                client, parse_path(path), coin_name="Bitcoin"
+                session, parse_path(path), coin_name="Bitcoin"
             ).node,
             address_n=address_index,
         )
@@ -170,25 +202,29 @@ def test_getaddress_multisig(client: Client, paths, address_index):
     ]
     multisig = messages.MultisigRedeemScriptType(pubkeys=pubs, m=2)
 
-    address = btc.get_address(
-        client,
-        "Bitcoin",
-        parse_path(paths[0]) + address_index,
-        show_display=True,
-        multisig=multisig,
-        script_type=messages.InputScriptType.SPENDMULTISIG,
-    )
+    with session.test_ctx as client:
+        if is_core(session):
+            IF = InputFlowConfirmAllWarnings(session)
+            client.set_input_flow(IF.get())
+        address = btc.get_address(
+            session,
+            "Bitcoin",
+            parse_path(paths[0]) + address_index,
+            show_display=True,
+            multisig=multisig,
+            script_type=messages.InputScriptType.SPENDMULTISIG,
+        )
 
     assert address
 
 
 @pytest.mark.multisig
 @pytest.mark.parametrize("paths, address_index", VECTORS_MULTISIG)
-def test_signtx_multisig(client: Client, paths, address_index):
+def test_signtx_multisig(session: Session, paths: list[str], address_index: list[int]):
     pubs = [
         messages.HDNodePathType(
             node=btc.get_public_node(
-                client, parse_path(path), coin_name="Bitcoin"
+                session, parse_path(path), coin_name="Bitcoin"
             ).node,
             address_n=address_index,
         )
@@ -201,7 +237,7 @@ def test_signtx_multisig(client: Client, paths, address_index):
 
     address_n = parse_path(paths[0]) + address_index
     address = btc.get_address(
-        client,
+        session,
         "Bitcoin",
         address_n,
         multisig=multisig,
@@ -225,8 +261,12 @@ def test_signtx_multisig(client: Client, paths, address_index):
         script_type=messages.OutputScriptType.PAYTOADDRESS,
     )
 
-    sig, _ = btc.sign_tx(
-        client, "Bitcoin", [inp1], [out1], prev_txes={prevhash: prevtx}
-    )
+    with session.test_ctx as client:
+        if is_core(session):
+            IF = InputFlowConfirmAllWarnings(session)
+            client.set_input_flow(IF.get())
+        sig, _ = btc.sign_tx(
+            session, "Bitcoin", [inp1], [out1], prev_txes={prevhash: prevtx}
+        )
 
     assert sig[0]

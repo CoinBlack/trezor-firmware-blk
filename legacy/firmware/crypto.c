@@ -18,6 +18,9 @@
  */
 
 #include "crypto.h"
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "address.h"
 #include "aes/aes.h"
@@ -27,14 +30,18 @@
 #include "curves.h"
 #include "hmac.h"
 #include "layout.h"
+#include "memzero.h"
 #include "pbkdf2.h"
 #include "secp256k1.h"
 #include "segwit_addr.h"
 #include "sha2.h"
+#include "util.h"
 
 #if !BITCOIN_ONLY
 #include "cash_addr.h"
 #endif
+
+#define MAX_MULTISIG_PUBKEY_COUNT 15
 
 uint32_t ser_length(uint32_t len, uint8_t *out) {
   if (len < 253) {
@@ -368,9 +375,55 @@ uint32_t cryptoMultisigPubkeyCount(const MultisigRedeemScriptType *multisig) {
                                : multisig->pubkeys_count;
 }
 
+static int comparePubkeysLexicographically(const void *first,
+                                           const void *second) {
+  return memcmp(first, second, 33);
+}
+
+uint32_t cryptoMultisigPubkeys(const CoinInfo *coin,
+                               const MultisigRedeemScriptType *multisig,
+                               uint8_t *pubkeys) {
+  const uint32_t n = cryptoMultisigPubkeyCount(multisig);
+  if (n < 1 || n > MAX_MULTISIG_PUBKEY_COUNT) {
+    return 0;
+  }
+
+  for (uint32_t i = 0; i < n; i++) {
+    const HDNode *pubnode = cryptoMultisigPubkey(coin, multisig, i);
+    if (!pubnode) {
+      return 0;
+    }
+    memcpy(pubkeys + i * 33, pubnode->public_key, 33);
+  }
+
+  if (multisig->has_pubkeys_order &&
+      multisig->pubkeys_order == MultisigPubkeysOrder_LEXICOGRAPHIC) {
+    qsort(pubkeys, n, 33, comparePubkeysLexicographically);
+  }
+
+  return n;
+}
+
 int cryptoMultisigPubkeyIndex(const CoinInfo *coin,
                               const MultisigRedeemScriptType *multisig,
                               const uint8_t *pubkey) {
+  uint8_t pubkeys[33 * MAX_MULTISIG_PUBKEY_COUNT];
+  if (!cryptoMultisigPubkeys(coin, multisig, pubkeys)) {
+    return -1;
+  }
+
+  uint32_t n = cryptoMultisigPubkeyCount(multisig);
+  for (size_t i = 0; i < n; i++) {
+    if (memcmp(pubkeys + i * 33, pubkey, 33) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+int cryptoMultisigXpubIndex(const CoinInfo *coin,
+                            const MultisigRedeemScriptType *multisig,
+                            const uint8_t *pubkey) {
   for (size_t i = 0; i < cryptoMultisigPubkeyCount(multisig); i++) {
     const HDNode *pubnode = cryptoMultisigPubkey(coin, multisig, i);
     if (pubnode && memcmp(pubnode->public_key, pubkey, 33) == 0) {
@@ -380,14 +433,20 @@ int cryptoMultisigPubkeyIndex(const CoinInfo *coin,
   return -1;
 }
 
+static int comparePubnodesLexicographically(const void *first,
+                                            const void *second) {
+  return memcmp(*(const HDNodeType **)first, *(const HDNodeType **)second,
+                sizeof(HDNodeType));
+}
+
 int cryptoMultisigFingerprint(const MultisigRedeemScriptType *multisig,
                               uint8_t *hash) {
-  static const HDNodeType *pubnodes[15], *swap;
+  static const HDNodeType *pubnodes[MAX_MULTISIG_PUBKEY_COUNT];
   const uint32_t n = cryptoMultisigPubkeyCount(multisig);
-  if (n < 1 || n > 15) {
+  if (n < 1 || n > MAX_MULTISIG_PUBKEY_COUNT) {
     return 0;
   }
-  if (multisig->m < 1 || multisig->m > 15) {
+  if (multisig->m < 1 || multisig->m > MAX_MULTISIG_PUBKEY_COUNT) {
     return 0;
   }
   for (uint32_t i = 0; i < n; i++) {
@@ -403,32 +462,30 @@ int cryptoMultisigFingerprint(const MultisigRedeemScriptType *multisig,
     if (pubnodes[i]->public_key.size != 33) return 0;
     if (pubnodes[i]->chain_code.size != 32) return 0;
   }
-  // minsort according to pubkey
-  for (uint32_t i = 0; i < n - 1; i++) {
-    for (uint32_t j = n - 1; j > i; j--) {
-      if (memcmp(pubnodes[i]->public_key.bytes, pubnodes[j]->public_key.bytes,
-                 33) > 0) {
-        swap = pubnodes[i];
-        pubnodes[i] = pubnodes[j];
-        pubnodes[j] = swap;
-      }
-    }
+
+  uint32_t pubkeys_order = multisig->has_pubkeys_order
+                               ? multisig->pubkeys_order
+                               : MultisigPubkeysOrder_PRESERVED;
+
+  if (pubkeys_order == MultisigPubkeysOrder_LEXICOGRAPHIC) {
+    // If the order of pubkeys is lexicographic, we don't want the fingerprint
+    // to depend on the order of the pubnodes, so we sort the pubnodes before
+    // hashing.
+    qsort(pubnodes, n, sizeof(HDNodeType *), comparePubnodesLexicographically);
   }
-  // hash sorted nodes
+
   SHA256_CTX ctx = {0};
   sha256_Init(&ctx);
-  sha256_Update(&ctx, (const uint8_t *)&(multisig->m), sizeof(uint32_t));
+  SHA256_UPDATE_INT(&ctx, multisig->m, uint32_t);
+  SHA256_UPDATE_INT(&ctx, pubkeys_order, uint32_t);
   for (uint32_t i = 0; i < n; i++) {
-    sha256_Update(&ctx, (const uint8_t *)&(pubnodes[i]->depth),
-                  sizeof(uint32_t));
-    sha256_Update(&ctx, (const uint8_t *)&(pubnodes[i]->fingerprint),
-                  sizeof(uint32_t));
-    sha256_Update(&ctx, (const uint8_t *)&(pubnodes[i]->child_num),
-                  sizeof(uint32_t));
-    sha256_Update(&ctx, pubnodes[i]->chain_code.bytes, 32);
-    sha256_Update(&ctx, pubnodes[i]->public_key.bytes, 33);
+    SHA256_UPDATE_INT(&ctx, pubnodes[i]->depth, uint32_t);
+    SHA256_UPDATE_INT(&ctx, pubnodes[i]->fingerprint, uint32_t);
+    SHA256_UPDATE_INT(&ctx, pubnodes[i]->child_num, uint32_t);
+    SHA256_UPDATE_BYTES(&ctx, pubnodes[i]->chain_code.bytes, 32);
+    SHA256_UPDATE_BYTES(&ctx, pubnodes[i]->public_key.bytes, 33);
   }
-  sha256_Update(&ctx, (const uint8_t *)&n, sizeof(uint32_t));
+  SHA256_UPDATE_INT(&ctx, n, uint32_t);
   sha256_Final(&ctx, hash);
   layoutProgressUpdate(true);
   return 1;
@@ -437,7 +494,7 @@ int cryptoMultisigFingerprint(const MultisigRedeemScriptType *multisig,
 int cryptoIdentityFingerprint(const IdentityType *identity, uint8_t *hash) {
   SHA256_CTX ctx = {0};
   sha256_Init(&ctx);
-  sha256_Update(&ctx, (const uint8_t *)&(identity->index), sizeof(uint32_t));
+  SHA256_UPDATE_INT(&ctx, identity->index, uint32_t);
   if (identity->has_proto && identity->proto[0]) {
     sha256_Update(&ctx, (const uint8_t *)(identity->proto),
                   strlen(identity->proto));
@@ -487,7 +544,7 @@ static bool check_cointype(const CoinInfo *coin, uint32_t slip44, bool full) {
 
 bool coin_path_check(const CoinInfo *coin, InputScriptType script_type,
                      uint32_t address_n_count, const uint32_t *address_n,
-                     bool has_multisig, bool full_check) {
+                     bool has_multisig, PathSchema unlock, bool full_check) {
   // This function checks that the path is a recognized path for the given coin.
   // Used by GetAddress to prevent ransom attacks where a user could be coerced
   // to use an address with an unenumerable path and used by SignTx to ensure
@@ -517,7 +574,7 @@ bool coin_path_check(const CoinInfo *coin, InputScriptType script_type,
     return valid;
   }
 
-  if (address_n[0] == PATH_HARDENED + 45) {
+  if (address_n[0] == PATH_HARDENED + 45 && address_n_count != 6) {
     if (address_n_count == 4) {
       // m/45' - BIP45 Copay Abandoned Multisig P2SH
       // m / purpose' / cosigner_index / change / address_index
@@ -527,29 +584,15 @@ bool coin_path_check(const CoinInfo *coin, InputScriptType script_type,
       valid = valid && (address_n[2] <= PATH_MAX_CHANGE);
       valid = valid && (address_n[3] <= PATH_MAX_ADDRESS_INDEX);
     } else if (address_n_count == 5) {
-      // Unchained Capital compatibility pattern. Will be removed in the
-      // future.
-      // m / 45' / coin_type' / account' / [0-1000000] / address_index
-      valid = valid && check_cointype(coin, address_n[1], full_check);
-      valid = valid && (address_n[2] & PATH_HARDENED);
-      valid =
-          valid && ((address_n[2] & PATH_UNHARDEN_MASK) <= PATH_MAX_ACCOUNT);
-      valid = valid && (address_n[3] <= 1000000);
-      valid = valid && (address_n[4] <= PATH_MAX_ADDRESS_INDEX);
-    } else if (address_n_count == 6) {
-      // Unchained Capital compatibility pattern. Will be removed in the
-      // future.
-      // m/45'/coin_type'/account'/[0-1000000]/change/address_index
-      // m/45'/coin_type/account/[0-1000000]/change/address_index
-      valid = valid &&
-              check_cointype(coin, PATH_HARDENED | address_n[1], full_check);
-      valid = valid && ((address_n[1] & PATH_HARDENED) ==
-                        (address_n[2] & PATH_HARDENED));
-      valid =
-          valid && ((address_n[2] & PATH_UNHARDEN_MASK) <= PATH_MAX_ACCOUNT);
-      valid = valid && (address_n[3] <= 1000000);
-      valid = valid && (address_n[4] <= PATH_MAX_CHANGE);
-      valid = valid && (address_n[5] <= PATH_MAX_ADDRESS_INDEX);
+      if ((address_n[1] & PATH_HARDENED) == 0) {
+        // Casa proposed "universal multisig" pattern with unhardened parts.
+        // m/45'/coin_type/account/change/address_index
+        valid = valid &&
+                check_cointype(coin, address_n[1] | PATH_HARDENED, full_check);
+        valid = valid && (address_n[2] <= PATH_MAX_ACCOUNT);
+        valid = valid && (address_n[3] <= PATH_MAX_CHANGE);
+        valid = valid && (address_n[4] <= PATH_MAX_ADDRESS_INDEX);
+      }
     } else {
       return false;
     }
@@ -557,6 +600,29 @@ bool coin_path_check(const CoinInfo *coin, InputScriptType script_type,
     if (full_check) {
       valid = valid && (script_type == InputScriptType_SPENDADDRESS ||
                         script_type == InputScriptType_SPENDMULTISIG);
+      valid = valid && has_multisig;
+    }
+
+    return valid;
+  }
+
+  if (address_n[0] == PATH_HARDENED + 45 && address_n_count == 6) {
+    // Unchained Capital compatibility pattern.
+    // m/45'/coin_type'/account'/[0-1000000]/change/address_index
+    // m/45'/coin_type/account/[0-1000000]/change/address_index
+    valid =
+        valid && check_cointype(coin, PATH_HARDENED | address_n[1], full_check);
+    valid = valid &&
+            ((address_n[1] & PATH_HARDENED) == (address_n[2] & PATH_HARDENED));
+    valid = valid && ((address_n[2] & PATH_UNHARDEN_MASK) <= PATH_MAX_ACCOUNT);
+    valid = valid && (address_n[3] <= 1000000);
+    valid = valid && (address_n[4] <= PATH_MAX_CHANGE);
+    valid = valid && (address_n[5] <= PATH_MAX_ADDRESS_INDEX);
+
+    if (full_check) {
+      valid = valid && (script_type == InputScriptType_SPENDADDRESS ||
+                        script_type == InputScriptType_SPENDMULTISIG ||
+                        script_type == InputScriptType_SPENDWITNESS);
       valid = valid && has_multisig;
     }
 
@@ -722,6 +788,305 @@ bool coin_path_check(const CoinInfo *coin, InputScriptType script_type,
     return valid;
   }
 
+  // m/10025' : SLIP25 CoinJoin
+  // m / purpose' / coin_type' / account' / script_type' / change /
+  // address_index
+  if (address_n[0] == PATH_SLIP25_PURPOSE) {
+    valid = valid && coin->has_taproot;
+    valid = valid && (coin->bech32_prefix != NULL);
+    valid = valid && (address_n_count == 6);
+    valid = valid && check_cointype(coin, address_n[1], full_check);
+    valid = valid && (address_n[2] == (PATH_HARDENED | 0));  // Only first acc.
+    valid = valid && (address_n[3] == (PATH_HARDENED | 1));  // Only SegWit v1.
+    valid = valid && (address_n[4] <= PATH_MAX_CHANGE);
+    valid = valid &&
+            ((unlock == SCHEMA_SLIP25_TAPROOT) ||
+             (unlock == SCHEMA_SLIP25_TAPROOT_EXTERNAL && address_n[4] == 0));
+    valid = valid && (address_n[5] <= PATH_MAX_ADDRESS_INDEX);
+    if (full_check) {
+      // we do not support Multisig for CoinJoin
+      valid = valid && !has_multisig;
+      valid = valid && (script_type == InputScriptType_SPENDTAPROOT);
+    }
+    return valid;
+  }
+
   // unknown path
+  return false;
+}
+
+bool is_multisig_input_script_type(InputScriptType script_type) {
+  // we do not support Multisig with Taproot yet
+  if (script_type == InputScriptType_SPENDMULTISIG ||
+      script_type == InputScriptType_SPENDP2SHWITNESS ||
+      script_type == InputScriptType_SPENDWITNESS) {
+    return true;
+  }
+  return false;
+}
+
+bool is_multisig_output_script_type(OutputScriptType script_type) {
+  // we do not support Multisig with Taproot yet
+  if (script_type == OutputScriptType_PAYTOMULTISIG ||
+      script_type == OutputScriptType_PAYTOP2SHWITNESS ||
+      script_type == OutputScriptType_PAYTOWITNESS) {
+    return true;
+  }
+  return false;
+}
+
+bool is_internal_input_script_type(InputScriptType script_type) {
+  if (script_type == InputScriptType_SPENDADDRESS ||
+      script_type == InputScriptType_SPENDMULTISIG ||
+      script_type == InputScriptType_SPENDP2SHWITNESS ||
+      script_type == InputScriptType_SPENDWITNESS ||
+      script_type == InputScriptType_SPENDTAPROOT) {
+    return true;
+  }
+  return false;
+}
+
+bool is_change_output_script_type(OutputScriptType script_type) {
+  if (script_type == OutputScriptType_PAYTOADDRESS ||
+      script_type == OutputScriptType_PAYTOMULTISIG ||
+      script_type == OutputScriptType_PAYTOP2SHWITNESS ||
+      script_type == OutputScriptType_PAYTOWITNESS ||
+      script_type == OutputScriptType_PAYTOTAPROOT) {
+    return true;
+  }
+  return false;
+}
+
+bool is_segwit_input_script_type(InputScriptType script_type) {
+  if (script_type == InputScriptType_SPENDP2SHWITNESS ||
+      script_type == InputScriptType_SPENDWITNESS ||
+      script_type == InputScriptType_SPENDTAPROOT) {
+    return true;
+  }
+  return false;
+}
+
+bool is_segwit_output_script_type(OutputScriptType script_type) {
+  if (script_type == OutputScriptType_PAYTOP2SHWITNESS ||
+      script_type == OutputScriptType_PAYTOWITNESS ||
+      script_type == OutputScriptType_PAYTOTAPROOT) {
+    return true;
+  }
+  return false;
+}
+
+bool change_output_to_input_script_type(OutputScriptType output_script_type,
+                                        InputScriptType *input_script_type) {
+  switch (output_script_type) {
+    case OutputScriptType_PAYTOADDRESS:
+      *input_script_type = InputScriptType_SPENDADDRESS;
+      return true;
+    case OutputScriptType_PAYTOMULTISIG:
+      *input_script_type = InputScriptType_SPENDMULTISIG;
+      return true;
+    case OutputScriptType_PAYTOWITNESS:
+      *input_script_type = InputScriptType_SPENDWITNESS;
+      return true;
+    case OutputScriptType_PAYTOP2SHWITNESS:
+      *input_script_type = InputScriptType_SPENDP2SHWITNESS;
+      return true;
+    case OutputScriptType_PAYTOTAPROOT:
+      *input_script_type = InputScriptType_SPENDTAPROOT;
+      return true;
+    default:
+      return false;
+  }
+}
+
+void slip21_from_seed(const uint8_t *seed, int seed_len, Slip21Node *out) {
+  hmac_sha512((uint8_t *)"Symmetric key seed", 18, seed, seed_len, out->data);
+}
+
+void slip21_derive_path(Slip21Node *inout, const uint8_t *label,
+                        size_t label_len) {
+  HMAC_SHA512_CTX hctx = {0};
+  hmac_sha512_Init(&hctx, inout->data, 32);
+  hmac_sha512_Update(&hctx, (uint8_t *)"\0", 1);
+  hmac_sha512_Update(&hctx, label, label_len);
+  hmac_sha512_Final(&hctx, inout->data);
+}
+
+const uint8_t *slip21_key(const Slip21Node *node) { return &node->data[32]; }
+
+bool cryptoCosiVerify(const ed25519_signature signature, const uint8_t *message,
+                      const size_t message_len, const int threshold,
+                      const ed25519_public_key *pubkeys,
+                      const int pubkeys_count, const uint8_t sigmask)
+
+{
+  if (sigmask == 0 || threshold < 1 || pubkeys_count < 1 || pubkeys_count > 8) {
+    // invalid parameters:
+    // - sigmask must specify at least one signer
+    // - at least one signature must be required
+    // - at least one pubkey must be provided
+    // - at most 8 pubkeys are supported (bit size of sigmask)
+    return false;
+  }
+  if (sigmask >= (1 << pubkeys_count)) {
+    // sigmask indicates more signers than provided pubkeys
+    return false;
+  }
+
+  ed25519_public_key selected_keys[8] = {0};
+  int N = 0;
+  for (int i = 0; i < pubkeys_count; i++) {
+    if (sigmask & (1 << i)) {
+      memcpy(selected_keys[N], pubkeys[i], sizeof(ed25519_public_key));
+      N++;
+    }
+  }
+
+  if (N < threshold) {
+    // not enough signatures
+    return false;
+  }
+
+  ed25519_public_key pk_combined = {0};
+  int res = ed25519_cosi_combine_publickeys(pk_combined, selected_keys, N);
+  if (res != 0) {
+    // error combining public keys
+    return false;
+  }
+
+  res = ed25519_sign_open(message, message_len, pk_combined, signature);
+  return res == 0;
+}
+
+bool multisig_uses_single_path(const MultisigRedeemScriptType *multisig) {
+  if (multisig->pubkeys_count == 0) {
+    // Pubkeys are specified by multisig.nodes and multisig.address_n, in this
+    // case all the pubkeys use the same path
+    return true;
+  } else {
+    // Pubkeys are specified by multisig.pubkeys, in this case we check that all
+    // the pubkeys use the same path
+    for (int i = 0; i < multisig->pubkeys_count; i++) {
+      if (multisig->pubkeys[i].address_n_count !=
+          multisig->pubkeys[0].address_n_count) {
+        return false;
+      }
+      for (int j = 0; j < multisig->pubkeys[i].address_n_count; j++) {
+        if (multisig->pubkeys[i].address_n[j] !=
+            multisig->pubkeys[0].address_n[j]) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+}
+
+// descriptor checksum manually translated from
+// https://github.com/bitcoin-core/HWI/blob/master/hwilib/descriptor.py
+
+static const char INPUT_CHARSET[] =
+    "0123456789()[],'/*abcdefgh@:$%{}"
+    "IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~"
+    "ijklmnopqrstuvwxyzABCDEFGH`#\"\\ ";
+static const char CHECKSUM_CHARSET[] = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+static const size_t DESCRIPTOR_CHECKSUM_LEN = 8;
+
+static uint64_t descriptor_polymod(uint64_t c, uint8_t val) {
+  uint64_t c0 = c >> 35;
+  c = ((c & 0x7FFFFFFFF) << 5) ^ val;
+  if (c0 & 1) {
+    c ^= 0xF5DEE51989;
+  }
+  if (c0 & 2) {
+    c ^= 0xA9FDCA3312;
+  }
+  if (c0 & 4) {
+    c ^= 0x1BAB10E32D;
+  }
+  if (c0 & 8) {
+    c ^= 0x3706B1677A;
+  }
+  if (c0 & 16) {
+    c ^= 0x644D626FFD;
+  }
+  return c;
+}
+
+static bool descriptor_checksum(const char *descriptor, size_t descriptor_len,
+                                char dest[DESCRIPTOR_CHECKSUM_LEN]) {
+  uint64_t c = 1;
+  uint8_t cls = 0;
+  uint8_t clscount = 0;
+
+  for (size_t i = 0; i < descriptor_len; i++) {
+    const char *const pos_ptr = strchr(INPUT_CHARSET, descriptor[i]);
+    if (!pos_ptr || !*pos_ptr) {
+      return false;
+    }
+    size_t pos = pos_ptr - INPUT_CHARSET;
+    c = descriptor_polymod(c, pos & 31);
+    cls = cls * 3 + (pos >> 5);
+    clscount += 1;
+    if (clscount == 3) {
+      c = descriptor_polymod(c, cls);
+      cls = 0;
+      clscount = 0;
+    }
+  }
+  if (clscount > 0) {
+    c = descriptor_polymod(c, cls);
+  }
+  for (size_t j = 0; j < 8; j++) {
+    c = descriptor_polymod(c, 0);
+  }
+  c ^= 1;
+  for (size_t j = 0; j < DESCRIPTOR_CHECKSUM_LEN; j++) {
+    size_t pos = (c >> (5 * (7 - j))) & 31;
+    if (pos >= sizeof(CHECKSUM_CHARSET)) {
+      return false;
+    }
+    dest[j] = CHECKSUM_CHARSET[pos];
+  }
+  return true;
+}
+
+bool descriptor_format(InputScriptType script_type, uint32_t root_fingerprint,
+                       const uint32_t address_n[], size_t address_n_count,
+                       const char *xpub, char *dest, size_t dest_size) {
+  const char *type = NULL;
+  const char *terminator = "";
+  if (script_type == InputScriptType_SPENDADDRESS) {
+    type = "pkh";
+  } else if (script_type == InputScriptType_SPENDP2SHWITNESS) {
+    type = "sh(wpkh";
+    terminator = ")";
+  } else if (script_type == InputScriptType_SPENDWITNESS) {
+    type = "wpkh";
+  } else if (script_type == InputScriptType_SPENDTAPROOT) {
+    type = "tr";
+  } else {
+    return false;
+  }
+  // (see layout2.c) /    i   '
+  char path_str[8 * (1 + 10 + 1) + 1] = {0};
+  size_t off = 0;
+  for (size_t i = 0; i < address_n_count; i++) {
+    uint32_t unhardened = address_n[i] & PATH_UNHARDEN_MASK;
+    bool is_hardened = address_n[i] & PATH_HARDENED;
+    off += snprintf(&path_str[off], sizeof(path_str) - off, "/%" PRIu32 "%s",
+                    unhardened, is_hardened ? "h" : "");
+    if (off + 1 >= sizeof(path_str)) {
+      return false;
+    }
+  }
+  int written = snprintf(dest, dest_size, "%s([%08" PRIx32 "%s]%s/<0;1>/*)%s#",
+                         type, root_fingerprint, path_str, xpub, terminator);
+  if (written > 1 && written + DESCRIPTOR_CHECKSUM_LEN < dest_size) {
+    // checksum is not computed over the `#` separator
+    if (descriptor_checksum(dest, written - 1, &dest[written])) {
+      return true;
+    }
+  }
+  memzero(dest, dest_size);
   return false;
 }

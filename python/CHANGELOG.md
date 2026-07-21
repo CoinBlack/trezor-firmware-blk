@@ -5,6 +5,228 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] (2026-02-10)
+[0.20.0]: https://github.com/trezor/trezor-firmware/compare/python/v0.20.0-dev0...python/v0.20.0
+
+Version 0.20.0 introduces a set of **major breaking API changes**. All user code must be upgraded.
+
+As announced, the API has changed significantly since the pre-release version 0.20.0-dev.
+
+### Incompatible changes
+- Refactor trezorlib session-based API.  [#6273]
+
+### Added
+- Use keyring package for storing THP keys and credentials.  [#6273]
+
+### Removed
+- Deprecate uploading language blob during firmware update.  [#6103]
+- debuglink: Remove vestigial memory_write/read/erase methods.  [#6273]
+- Deprecated `@expect` decorator was removed.  [#6273]
+- Deprecated `str` return values in functions whose result is a success have been removed.  [#6273]
+
+### Fixed
+- Avoid dropping WebUSB chunks in case of a timeout.  [#6112]
+- Support resuming THP sessions.  [#6273]
+- trezorctl: BLE behavior on macOS was improved.  [#6449]
+- trezorctl: fix crash when device authentication allowlist is unavailable.  [#6449]
+
+## [0.20.0-dev0] (2025-10-21)
+[0.20.0-dev0]: https://github.com/trezor/trezor-firmware/compare/python/v0.13.10...python/v0.20.0-dev0
+
+Version 0.20.0 introduces a set of **major breaking API changes**. All user code must be upgraded.
+
+This version is a pre-release. The new API is unstable and may change until 0.20.0 is released.
+
+### Incompatible changes
+- All Trezor functions now run on top of a `Session` instead of `TrezorClient`.
+- Reworked API of `TrezorClient`.
+
+### Added
+- Support for T3W1.
+- Support for Trezor-Host Protocol.  [#4976]
+- Cardano: Add support for signing arbitrary messages.  [#3509]
+- Added support for Bluetooth Low Energy transport.  [#4948]
+- Added new translation blob format to support larger fonts.  [#4975]
+- Generation of SLIP-21 node for a new way of storing labels (using Evolu).  [#5220]
+- Add support for displaying the message hash when signing Ethereum EIP-712 typed data.  [#5344]
+- Check Tropic fields to AuthenticityProof.  [#5760]
+- Allow exporting device serial number.  [#5928]
+- `debuglink`: Add new optional enum DebugTouchEventType to DebugLinkDecision message.  [#5328]
+- `debuglink`: Add screen buttons and button actions.  [#4740]
+- `debuglink`: Add 'navigate_to_menu_item' button action.  [#5499]
+
+### Changed
+- Changed trezorlib to session-based. Changes also affect trezorctl, python tools, and tests.  [#4976]
+- Changed build system to uv.
+- Loadable definitions from data.trezor.io query the new path structure.
+
+### Deprecated
+- `trezorlib.__version__` is deprecated, use `importlib.metadata.version("trezor")`.
+
+### Removed
+- Remove BNB Beacon Chain support.  [#4227]
+- Dropped support for Python 3.8.
+- `ethereum.network_from_address_n` was removed.
+
+### Fixed
+- Fixed device restart handling during firmware update.  [#5000]
+- Fix broken interactive test mode.  [#5455]
+
+## [0.13.10] (2025-02-12)
+[0.13.10]: https://github.com/trezor/trezor-firmware/compare/python/v0.13.9...python/v0.13.10
+
+### Added
+- Added support for T3B1.  [#3728]
+- Added support for Trezor models not known by the current version of the library.  [#3993]
+- Added ability to set Optiga's security event counter to maximum: `trezorctl debug optiga-set-sec-max`.  [#4000]
+- Enum for valid device rotations.  [#4041]
+- Added pretty-printing of protobuf messages in IPython (`_repr_pretty_`).  [#4076]
+- Added support for benchmarks.  [#4101]
+- Added support for entropy check workflow in `device.reset()`.  [#4155]
+- Added shortcut for loading a debug device with the "academic" SLIP39 seed.  [#4282]
+- Added support for lexicographic sorting of pubkeys in multisig.  [#4351]
+- Added an `expect` argument to `TrezorClient.call()`, to enforce the returned message type.  [#4464]
+- Introduced `device.setup()` as a cleaner upgrade to `device.reset()`.  [#4464]
+
+### Changed
+- Most USB level errors are now converted to `TransportException`.  [#4089]
+
+### Deprecated
+- `@expect` decorator is deprecated -- use `TrezorClient.call(expect=...)` instead.  [#4464]
+- String return values are deprecated in functions where the semantic result is a success (specifically those that were returning the message from Trezor's `Success` response). Type annotations are updated to `str | None`, and in a future release those functions will be returning `None` on success, or raise an exception on a failure.  [#4464]
+- `device.reset()` is deprecated, migrate to `device.setup()`.  [#4464]
+- Return value of `device.recover()` is deprecated. In the future, this function will return `None`.  [#4464]
+
+### Removed
+- CoSi functionality.  [#3442]
+- Removed display_random feature.  [#4119]
+
+### Fixed
+- It is now possible to interrupt USB communication (via Ctrl+C, or a signal, or any other way).  [#4089]
+- Use `frozenset` for `models.TREZORS` to prevent accidental modification.
+
+### Incompatible changes
+- Return values in `solana` module were changed from the wrapping protobuf messages to the raw inner values (`str` for address, `bytes` for pubkey / signature).  [#4464]
+- `trezorctl device` commands whose default result is a success will not print anything to stdout anymore, in line with Unix philosophy.  [#4464]
+
+## [0.13.9] (2024-06-19)
+[0.13.9]: https://github.com/trezor/trezor-firmware/compare/python/v0.13.8...python/v0.13.9
+
+### Added
+- trezorctl: Automatically go to bootloader when upgrading firmware.  [#2919]
+- Support interaction-less upgrade.  [#2919]
+- Added user adjustable brightness setting.  [#3208]
+- Added Solana support.  [#3359]
+- trezorctl: support for human-friendly Trezor Safe device authenticity check (requires separate installation of `cryptography` library).  [#3364]
+- Added support for T3T1.  [#3422]
+- Stellar: add support for StellarClaimClaimableBalanceOp.  [#3434]
+- Cardano: Added support for tagged sets in CBOR (tag 258).  [#3496]
+- Cardano: Added support for Conway certificates.  [#3496]
+- Added ability to request Shamir backups with any number of groups/shares.  [#3636]
+- Added flag for setting up device using SLIP39 "single".  [#3868]
+- Added `--quality` argument to `trezorctl set homescreen`.  [#3893]
+
+### Changed
+- Renamed `trezorctl device self-test` command to `trezorctl device prodtest-t1`.  [#3504]
+- Increased default JPEG quality for uploaded homescreen.  [#3893]
+
+### Incompatible changes
+- Renamed flag used for setting up device using BIP39 to `bip39`.  [#3868]
+- Minimum required Python version is now 3.8.
+
+
+## [0.13.8] (2023-10-19)
+[0.13.8]: https://github.com/trezor/trezor-firmware/compare/python/v0.13.7...python/v0.13.8
+
+### Added
+- Added full support for Trezor Safe 3 (T2B1).
+- Added support for STM32F429I-DISC1 board  [#2989]
+- Add support for address chunkification in Receive and Sign flow.  [#3237]
+- Implement device authenticate command.  [#3255]
+- trezorctl: support unlocking bootloader via `trezorctl device unlock-bootloader`.
+
+### Changed
+- Use 'h' character for hardened BIP-32 components in help texts.  [#3037]
+- trezorctl: Use 'h' character in generated descriptors.  [#3037]
+- ClickUI: notify user in terminal that they should enter PIN or passphrase on Trezor.  [#3203]
+- Internal names are used consistently in constants and names. Original model-based names are kept as aliases for backwards compatibility.
+- Trezor model detection will try to use the `internal_name` field.
+
+### Fixed
+- Drop simple-rlp dependency and use internal copy  [#3045]
+- Fixed printing Trezor model when validating firmware image  [#3227]
+- Corrected vendor header signing keys for Safe 3 (T2B1).
+
+
+## [0.13.7] (2023-06-02)
+[0.13.7]: https://github.com/trezor/trezor-firmware/compare/python/v0.13.6...python/v0.13.7
+
+### Added
+- Recognize signing keys for T2B1.
+- Add possibility to call tutorial flow  [#2795]
+- Add ability to change homescreen for Model R  [#2967]
+- Recognize hw model field in vendor headers.  [#3048]
+
+
+## [0.13.6] (2023-04-24)
+[0.13.6]: https://github.com/trezor/trezor-firmware/compare/python/v0.13.5...python/v0.13.6
+
+### Added
+- Signed Ethereum network and token definitions from host  [#15]
+- Support SLIP-25 in get-descriptor.  [#2541]
+- trezorctl: Support prompt configuration for `encrypt-keyvalue` / `decrypt-keyvalue`.  [#2608]
+- Support for external reward addresses in Cardano CIP-36 registrations  [#2692]
+- Auto-convert image to Trezor's homescreen format.  [#2880]
+
+### Changed
+- `trezorctl firmware verify` changed order of checks - fingerprint is validated before signatures.  [#2745]
+
+### Fixed
+- Removed attempt to initialize the device after wipe in bootloader mode  [#2221]
+- Limit memory exhaustion in protobuf parser.  [#2439]
+- `trezorctl ethereum sign-tx`: renamed `--gas-limit` shortcut to `-G` to avoid collision with `-t/--token`  [#2535]
+- Fixed behavior of UDP transport search by path when full path is provided and prefix_search is True  [#2786]
+- Fixed behavior of `trezorctl fw` with unsigned Trezor One firmwares.  [#2801]
+- Improve typing information when `TrezorClient` has a more intelligent UI object.  [#2832]
+- When enabling passphrase force-on-device, do not also prompt to enable passphrase if it is already enabled.  [#2833]
+
+
+## [0.13.5] (2022-12-28)
+[0.13.5]: https://github.com/trezor/trezor-firmware/compare/python/v0.13.4...python/v0.13.5
+
+### Added
+- Add support for model field in firmware image.  [#2701]
+- Add support for v3-style Trezor One signatures.  [#2701]
+
+### Changed
+- More structured information about signing keys for different models.  [#2701]
+
+### Incompatible changes
+- Instead of accepting a list of public keys, `FirmwareType.verify()` accepts a parameter configuring whether to use production or development keys.  [#2701]
+
+
+## [0.13.4] (2022-11-04)
+[0.13.4]: https://github.com/trezor/trezor-firmware/compare/python/v0.13.3...python/v0.13.4
+
+### Added
+- Add UnlockPath message.  [#2289]
+- Added new TOI formats - little endian full-color and even-high grayscale  [#2414]
+- Add device set-busy command to trezorctl.  [#2445]
+- Support SLIP-25 accounts in get-public-node and get-address.  [#2517]
+- Add possibility to save emulator screenshots.  [#2547]
+- Support for Cardano CIP-36 governance registration format  [#2561]
+
+### Removed
+- Remove DATA parameter from trezorctl cosi commit.
+- Remove firmware dumping capability.  [#2433]
+
+### Fixed
+- Fixed issue where type declarations were not visible to consumer packages.  [#2542]
+
+### Incompatible changes
+- Refactored firmware parsing and validation to a more object oriented approach.  [#2576]
+
+
 ## [0.13.3] (2022-07-13)
 [0.13.3]: https://github.com/trezor/trezor-firmware/compare/python/v0.13.2...python/v0.13.3
 
@@ -565,6 +787,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [f#778]: https://github.com/trezor/trezor-firmware/pull/778
 [f#823]: https://github.com/trezor/trezor-firmware/pull/823
 [f#1082]: https://github.com/trezor/trezor-firmware/pull/1082
+[#15]: https://github.com/trezor/trezor-firmware/pull/15
 [#37]: https://github.com/trezor/trezor-firmware/pull/37
 [#38]: https://github.com/trezor/trezor-firmware/pull/38
 [#94]: https://github.com/trezor/python-trezor/pull/94
@@ -666,8 +889,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#2159]: https://github.com/trezor/trezor-firmware/pull/2159
 [#2199]: https://github.com/trezor/trezor-firmware/pull/2199
 [#2219]: https://github.com/trezor/trezor-firmware/pull/2219
+[#2221]: https://github.com/trezor/trezor-firmware/pull/2221
 [#2230]: https://github.com/trezor/trezor-firmware/pull/2230
 [#2239]: https://github.com/trezor/trezor-firmware/pull/2239
 [#2284]: https://github.com/trezor/trezor-firmware/pull/2284
+[#2289]: https://github.com/trezor/trezor-firmware/pull/2289
 [#2354]: https://github.com/trezor/trezor-firmware/pull/2354
 [#2364]: https://github.com/trezor/trezor-firmware/pull/2364
+[#2414]: https://github.com/trezor/trezor-firmware/pull/2414
+[#2433]: https://github.com/trezor/trezor-firmware/pull/2433
+[#2439]: https://github.com/trezor/trezor-firmware/pull/2439
+[#2445]: https://github.com/trezor/trezor-firmware/pull/2445
+[#2517]: https://github.com/trezor/trezor-firmware/pull/2517
+[#2535]: https://github.com/trezor/trezor-firmware/pull/2535
+[#2541]: https://github.com/trezor/trezor-firmware/pull/2541
+[#2542]: https://github.com/trezor/trezor-firmware/pull/2542
+[#2547]: https://github.com/trezor/trezor-firmware/pull/2547
+[#2561]: https://github.com/trezor/trezor-firmware/pull/2561
+[#2576]: https://github.com/trezor/trezor-firmware/pull/2576
+[#2608]: https://github.com/trezor/trezor-firmware/pull/2608
+[#2692]: https://github.com/trezor/trezor-firmware/pull/2692
+[#2701]: https://github.com/trezor/trezor-firmware/pull/2701
+[#2745]: https://github.com/trezor/trezor-firmware/pull/2745
+[#2786]: https://github.com/trezor/trezor-firmware/pull/2786
+[#2795]: https://github.com/trezor/trezor-firmware/pull/2795
+[#2801]: https://github.com/trezor/trezor-firmware/pull/2801
+[#2832]: https://github.com/trezor/trezor-firmware/pull/2832
+[#2833]: https://github.com/trezor/trezor-firmware/pull/2833
+[#2880]: https://github.com/trezor/trezor-firmware/pull/2880
+[#2919]: https://github.com/trezor/trezor-firmware/pull/2919
+[#2967]: https://github.com/trezor/trezor-firmware/pull/2967
+[#2989]: https://github.com/trezor/trezor-firmware/pull/2989
+[#3037]: https://github.com/trezor/trezor-firmware/pull/3037
+[#3045]: https://github.com/trezor/trezor-firmware/pull/3045
+[#3048]: https://github.com/trezor/trezor-firmware/pull/3048
+[#3203]: https://github.com/trezor/trezor-firmware/pull/3203
+[#3208]: https://github.com/trezor/trezor-firmware/pull/3208
+[#3227]: https://github.com/trezor/trezor-firmware/pull/3227
+[#3237]: https://github.com/trezor/trezor-firmware/pull/3237
+[#3255]: https://github.com/trezor/trezor-firmware/pull/3255
+[#3359]: https://github.com/trezor/trezor-firmware/pull/3359
+[#3364]: https://github.com/trezor/trezor-firmware/pull/3364
+[#3422]: https://github.com/trezor/trezor-firmware/pull/3422
+[#3434]: https://github.com/trezor/trezor-firmware/pull/3434
+[#3442]: https://github.com/trezor/trezor-firmware/pull/3442
+[#3496]: https://github.com/trezor/trezor-firmware/pull/3496
+[#3504]: https://github.com/trezor/trezor-firmware/pull/3504
+[#3509]: https://github.com/trezor/trezor-firmware/pull/3509
+[#3636]: https://github.com/trezor/trezor-firmware/pull/3636
+[#3728]: https://github.com/trezor/trezor-firmware/pull/3728
+[#3868]: https://github.com/trezor/trezor-firmware/pull/3868
+[#3893]: https://github.com/trezor/trezor-firmware/pull/3893
+[#3993]: https://github.com/trezor/trezor-firmware/pull/3993
+[#4000]: https://github.com/trezor/trezor-firmware/pull/4000
+[#4041]: https://github.com/trezor/trezor-firmware/pull/4041
+[#4076]: https://github.com/trezor/trezor-firmware/pull/4076
+[#4089]: https://github.com/trezor/trezor-firmware/pull/4089
+[#4101]: https://github.com/trezor/trezor-firmware/pull/4101
+[#4119]: https://github.com/trezor/trezor-firmware/pull/4119
+[#4155]: https://github.com/trezor/trezor-firmware/pull/4155
+[#4227]: https://github.com/trezor/trezor-firmware/pull/4227
+[#4282]: https://github.com/trezor/trezor-firmware/pull/4282
+[#4351]: https://github.com/trezor/trezor-firmware/pull/4351
+[#4464]: https://github.com/trezor/trezor-firmware/pull/4464
+[#4740]: https://github.com/trezor/trezor-firmware/pull/4740
+[#4948]: https://github.com/trezor/trezor-firmware/pull/4948
+[#4975]: https://github.com/trezor/trezor-firmware/pull/4975
+[#4976]: https://github.com/trezor/trezor-firmware/pull/4976
+[#5000]: https://github.com/trezor/trezor-firmware/pull/5000
+[#5220]: https://github.com/trezor/trezor-firmware/pull/5220
+[#5328]: https://github.com/trezor/trezor-firmware/pull/5328
+[#5344]: https://github.com/trezor/trezor-firmware/pull/5344
+[#5455]: https://github.com/trezor/trezor-firmware/pull/5455
+[#5499]: https://github.com/trezor/trezor-firmware/pull/5499
+[#5760]: https://github.com/trezor/trezor-firmware/pull/5760
+[#5928]: https://github.com/trezor/trezor-firmware/pull/5928
+[#6103]: https://github.com/trezor/trezor-firmware/pull/6103
+[#6112]: https://github.com/trezor/trezor-firmware/pull/6112
+[#6273]: https://github.com/trezor/trezor-firmware/pull/6273
+[#6449]: https://github.com/trezor/trezor-firmware/pull/6449

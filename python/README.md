@@ -9,7 +9,7 @@ See <https://trezor.io> for more information.
 
 ## Install
 
-Python Trezor tools require Python 3.6 or higher, and libusb 1.0. The easiest
+Python Trezor tools require Python 3.9 or higher, and libusb 1.0. The easiest
 way to install it is with `pip`. The rest of this guide assumes you have
 a working `pip`; if not, you can refer to [this
 guide](https://packaging.python.org/tutorials/installing-packages/).
@@ -26,8 +26,8 @@ On Windows, you also need to either install [Trezor Bridge](https://suite.trezor
 
 ### Firmware version requirements
 
-Current trezorlib version supports Trezor One version 1.8.0 and up, and Trezor T version
-2.1.0 and up.
+Current trezorlib version supports Trezor One version 1.8.0 and up, Trezor T version
+2.1.0 and up, and all versions of the Trezor Safe family.
 
 For firmware versions below 1.8.0 and 2.1.0 respectively, the only supported operation
 is "upgrade firmware".
@@ -37,6 +37,13 @@ Trezor One with firmware _older than 1.7.0_ and bootloader _older than 1.6.0_
 you install HIDAPI support (see below).
 
 ### Installation options
+
+* **Bluetooth**: To support connecting to T3W1 or later models via Bluetooth,
+  additional dependencies are needed. Install with:
+
+  ```sh
+  pip3 install trezor[ble]
+  ```
 
 * **Ethereum**: To support Ethereum signing from command line, additional packages are
   needed. Install with:
@@ -64,30 +71,24 @@ you install HIDAPI support (see below).
   pip3 install trezor[hidapi]
   ```
 
-To install all three, use `pip3 install trezor[hidapi,ethereum,stellar]`.
+To install all four, use `pip3 install trezor[ble,hidapi,ethereum,stellar]`.
 
 ### Distro packages
 
 Check out [Repology](https://repology.org/metapackage/python:trezor) to see if your
 operating system has an up-to-date python-trezor package.
 
-### Installing latest version from GitHub
-
-```sh
-pip3 install "git+https://github.com/trezor/trezor-firmware#egg=trezor&subdirectory=python"
-```
-
 ### Running from source
 
-Install the [Poetry](https://python-poetry.org/) tool, checkout
-`trezor-firmware` from git, and enter the poetry shell:
+Install the [uv](https://docs.astral.sh/uv/) tool, checkout `trezor-firmware` from git,
+and activate the uv environment:
 
 ```sh
-pip3 install poetry
 git clone https://github.com/trezor/trezor-firmware
 cd trezor-firmware
-poetry install
-poetry shell
+git submodule update --init --recursive
+uv sync
+source .venv/bin/activate
 ```
 
 In this environment, trezorlib and the `trezorctl` tool is running from the live
@@ -97,8 +98,9 @@ sources, so your changes are immediately effective.
 
 The included `trezorctl` python script can perform various tasks such as
 changing setting in the Trezor, signing transactions, retrieving account
-info and addresses. See the [docs/](docs/) sub folder for detailed
-examples and options.
+info and addresses. See the
+[python/docs/](https://github.com/trezor/trezor-firmware/tree/main/python/docs)
+sub folder for detailed examples and options.
 
 NOTE: An older version of the `trezorctl` command is [available for
 Debian Stretch](https://packages.debian.org/en/stretch/python-trezor)
@@ -107,34 +109,20 @@ Debian Stretch](https://packages.debian.org/en/stretch/python-trezor)
 ## Python Library
 
 You can use this python library to interact with a Trezor and use its capabilities in
-your application. See examples here in the [tools/](tools/) sub folder.
+your application. See examples here in the
+[tools/](https://github.com/trezor/trezor-firmware/tree/main/python/tools)
+sub folder.
 
-## PIN Entering
+## Changelog
 
-When you are asked for PIN, you have to enter scrambled PIN. Follow the
-numbers shown on Trezor display and enter the their positions using the
-numeric keyboard mapping:
+Visit [CHANGELOG.md] for the latest changes.
 
-|   |   |   |
-|---|---|---|
-| 7 | 8 | 9 |
-| 4 | 5 | 6 |
-| 1 | 2 | 3 |
-
-Example: your PIN is **1234** and Trezor is displaying the following:
-
-|   |   |   |
-|---|---|---|
-| 2 | 8 | 3 |
-| 5 | 4 | 6 |
-| 7 | 9 | 1 |
-
-You have to enter: **3795**
+[CHANGELOG.md]: https://github.com/trezor/trezor-firmware/blob/main/python/CHANGELOG.md
 
 ## Contributing
 
-If you want to change protobuf or coin definitions, you will need to regenerate
-definitions in the `python/` subdirectory.
+If you want to change protobuf definitions, you will need to regenerate definitions in
+the `python/` subdirectory.
 
 First, make sure your submodules are up-to-date with:
 
@@ -148,6 +136,3 @@ directory:
 ```sh
 make gen
 ```
-
-To get support for BTC-like coins, these steps are enough and no further
-changes to the library are necessary.

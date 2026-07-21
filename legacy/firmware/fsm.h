@@ -28,6 +28,10 @@
 #include "messages-management.pb.h"
 #include "messages-nem.pb.h"
 #include "messages-stellar.pb.h"
+#include "messages.pb.h"
+
+// CoinJoin fee rate multiplier.
+#define FEE_RATE_DECIMALS (1000000)
 
 // message functions
 
@@ -60,6 +64,7 @@ void fsm_msgLoadDevice(const LoadDevice *msg);
 #endif
 void fsm_msgResetDevice(const ResetDevice *msg);
 void fsm_msgEntropyAck(const EntropyAck *msg);
+void fsm_msgEntropyCheckContinue(const EntropyCheckContinue *msg);
 void fsm_msgBackupDevice(const BackupDevice *msg);
 void fsm_msgCancel(const Cancel *msg);
 void fsm_msgLockDevice(const LockDevice *msg);
@@ -71,6 +76,7 @@ void fsm_msgWordAck(const WordAck *msg);
 void fsm_msgSetU2FCounter(const SetU2FCounter *msg);
 void fsm_msgGetNextU2FCounter(void);
 void fsm_msgGetFirmwareHash(const GetFirmwareHash *msg);
+void fsm_msgSetBusy(const SetBusy *msg);
 
 // coin
 void fsm_msgGetPublicKey(const GetPublicKey *msg);
@@ -80,13 +86,17 @@ void fsm_msgTxAck(
 void fsm_msgGetAddress(const GetAddress *msg);
 void fsm_msgSignMessage(const SignMessage *msg);
 void fsm_msgVerifyMessage(const VerifyMessage *msg);
+void fsm_msgGetOwnershipId(const GetOwnershipId *msg);
+void fsm_msgGetOwnershipProof(const GetOwnershipProof *msg);
+void fsm_msgAuthorizeCoinJoin(const AuthorizeCoinJoin *msg);
+void fsm_msgCancelAuthorization(const CancelAuthorization *msg);
+void fsm_msgDoPreauthorized(const DoPreauthorized *msg);
+void fsm_msgUnlockPath(const UnlockPath *msg);
 
 // crypto
 void fsm_msgCipherKeyValue(const CipherKeyValue *msg);
 void fsm_msgSignIdentity(const SignIdentity *msg);
 void fsm_msgGetECDHSessionKey(const GetECDHSessionKey *msg);
-void fsm_msgCosiCommit(const CosiCommit *msg);
-void fsm_msgCosiSign(const CosiSign *msg);
 
 // debug
 #if DEBUG_LINK
@@ -143,10 +153,16 @@ bool fsm_layoutSignMessage(const uint8_t *msg, uint32_t len);
 bool fsm_layoutVerifyMessage(const uint8_t *msg, uint32_t len);
 
 bool fsm_layoutPathWarning(void);
+bool fsm_layoutDifferentPathsWarning(void);
 bool fsm_checkCoinPath(const CoinInfo *coin, InputScriptType script_type,
                        uint32_t address_n_count, const uint32_t *address_n,
-                       bool has_multisig, bool show_warning);
+                       bool has_multisig, MessageType message_type,
+                       bool show_warning);
+
+bool fsm_getOwnershipId(uint8_t *script_pubkey, size_t script_pubkey_size,
+                        uint8_t ownership_id[32]);
 
 void fsm_abortWorkflows(void);
+void fsm_postMsgCleanup(MessageType message_type);
 
 #endif

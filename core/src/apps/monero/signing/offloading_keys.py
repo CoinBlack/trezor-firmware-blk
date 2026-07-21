@@ -1,9 +1,7 @@
 from micropython import const
 from typing import TYPE_CHECKING
 
-from trezor import utils
-
-from apps.monero.xmr import crypto, crypto_helpers
+from apps.monero.xmr.crypto_helpers import compute_hmac
 
 if TYPE_CHECKING:
     from trezor.messages import (
@@ -27,6 +25,9 @@ def _build_key(
     """
     Creates an unique-purpose key
     """
+    from trezor import utils
+
+    from apps.monero.xmr import crypto_helpers
 
     key_buff = _BUILD_KEY_BUFFER
     utils.ensure(len(secret) == _SECRET_LENGTH, "Invalid key length")
@@ -67,25 +68,18 @@ def hmac_key_txin_comm(key_hmac: bytes, idx: int) -> bytes:
     return _build_key(key_hmac, b"txin-comm", idx)
 
 
-def hmac_key_txdst(key_hmac: bytes, idx: int) -> bytes:
+def _hmac_key_txdst(key_hmac: bytes, idx: int) -> bytes:
     """
     TxDestinationEntry[i] hmac key
     """
     return _build_key(key_hmac, b"txdest", idx)
 
 
-def hmac_key_txout(key_hmac: bytes, idx: int) -> bytes:
+def _hmac_key_txout(key_hmac: bytes, idx: int) -> bytes:
     """
     (TxDestinationEntry[i] || tx.vout[i]) hmac key
     """
     return _build_key(key_hmac, b"txout", idx)
-
-
-def hmac_key_txout_asig(key_hmac: bytes, idx: int) -> bytes:
-    """
-    rsig[i] hmac key. Range signature HMAC
-    """
-    return _build_key(key_hmac, b"txout-asig", idx)
 
 
 def enc_key_txin_alpha(key_enc: bytes, idx: int) -> bytes:
@@ -102,25 +96,11 @@ def enc_key_spend(key_enc: bytes, idx: int) -> bytes:
     return _build_key(key_enc, b"txin-spend", idx)
 
 
-def enc_key_cout(key_enc: bytes, idx: int | None = None) -> bytes:
-    """
-    Chacha20Poly1305 encryption key for multisig C values from MLASG.
-    """
-    return _build_key(key_enc, b"cout", idx)
-
-
 def key_signature(master: bytes, idx: int, is_iv: bool = False) -> bytes:
     """
     Generates signature offloading related offloading keys
     """
     return _build_key(master, b"sig-iv" if is_iv else b"sig-key", idx)
-
-
-def det_comm_masks(key_enc: bytes, idx: int) -> crypto.Scalar:
-    """
-    Deterministic output commitment masks
-    """
-    return crypto_helpers.decodeint(_build_key(key_enc, b"out-mask", idx))
 
 
 def gen_hmac_vini(
@@ -136,6 +116,7 @@ def gen_hmac_vini(
     are uncheckable, decoy keys in step 9 are just random keys.
     """
     from trezor import protobuf
+
     from apps.monero.xmr.keccak_hasher import get_keccak_writer
 
     kwriter = get_keccak_writer()
@@ -153,7 +134,7 @@ def gen_hmac_vini(
     kwriter.write(vini_bin)
 
     hmac_key_vini = hmac_key_txin(key, idx)
-    hmac_vini = crypto_helpers.compute_hmac(hmac_key_vini, kwriter.get_digest())
+    hmac_vini = compute_hmac(hmac_key_vini, kwriter.get_digest())
     return hmac_vini
 
 
@@ -164,14 +145,15 @@ def gen_hmac_vouti(
     Generates HMAC for (TxDestinationEntry[i] || tx.vout[i])
     """
     from trezor import protobuf
+
     from apps.monero.xmr.keccak_hasher import get_keccak_writer
 
     kwriter = get_keccak_writer()
     kwriter.write(protobuf.dump_message_buffer(dst_entr))
     kwriter.write(tx_out_bin)
 
-    hmac_key_vouti = hmac_key_txout(key, idx)
-    hmac_vouti = crypto_helpers.compute_hmac(hmac_key_vouti, kwriter.get_digest())
+    hmac_key_vouti = _hmac_key_txout(key, idx)
+    hmac_vouti = compute_hmac(hmac_key_vouti, kwriter.get_digest())
     return hmac_vouti
 
 
@@ -182,13 +164,14 @@ def gen_hmac_tsxdest(
     Generates HMAC for TxDestinationEntry[i]
     """
     from trezor import protobuf
+
     from apps.monero.xmr.keccak_hasher import get_keccak_writer
 
     kwriter = get_keccak_writer()
     kwriter.write(protobuf.dump_message_buffer(dst_entr))
 
-    hmac_key = hmac_key_txdst(key, idx)
-    hmac_tsxdest = crypto_helpers.compute_hmac(hmac_key, kwriter.get_digest())
+    hmac_key = _hmac_key_txdst(key, idx)
+    hmac_tsxdest = compute_hmac(hmac_key, kwriter.get_digest())
     return hmac_tsxdest
 
 

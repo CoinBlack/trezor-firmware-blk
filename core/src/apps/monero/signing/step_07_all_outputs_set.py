@@ -4,29 +4,31 @@ into the tx extra field and then hashes it into the prefix hash.
 The prefix hash is then complete.
 """
 
-import gc
 from typing import TYPE_CHECKING
-
-from trezor import utils
-
-from apps.monero import layout
-from apps.monero.xmr import crypto
-
-from .state import State
 
 if TYPE_CHECKING:
     from trezor.messages import MoneroTransactionAllOutSetAck
 
+    from apps.monero.layout import MoneroTransactionProgress
 
-async def all_outputs_set(state: State) -> MoneroTransactionAllOutSetAck:
-    state.mem_trace(0)
+    from .state import State
 
-    await layout.transaction_step(state, state.STEP_ALL_OUT)
+
+def all_outputs_set(
+    state: State, progress: MoneroTransactionProgress
+) -> MoneroTransactionAllOutSetAck:
+    import gc
+
+    mem_trace = state.mem_trace  # local_cache_attribute
+
+    mem_trace(0)
+
+    progress.step(state, state.STEP_ALL_OUT)
     state.mem_trace(1)
 
     _validate(state)
     state.is_processing_offloaded = False
-    state.mem_trace(2)
+    mem_trace(2)
 
     extra_b = _set_tx_extra(state)
     # tx public keys not needed anymore
@@ -35,20 +37,30 @@ async def all_outputs_set(state: State) -> MoneroTransactionAllOutSetAck:
     state.rsig_grouping = None
     state.rsig_offload = None
     gc.collect()
-    state.mem_trace(3)
+    mem_trace(3)
 
     # Completes the transaction prefix hash by including extra
-    _set_tx_prefix(state, extra_b)
+    # _set_tx_prefix
+    # Adds `extra` to the tx_prefix_hash, which is the last needed item,
+    # so the tx_prefix_hash is now complete and can be incorporated
+    # into full_message_hash.
+    # Serializing "extra" type as BlobType.
+    # uvarint(len(extra)) || extra
+    state.tx_prefix_hasher.uvarint(len(extra_b))
+    state.tx_prefix_hasher.buffer(extra_b)
+    state.tx_prefix_hash = state.tx_prefix_hasher.get_digest()
+    state.tx_prefix_hasher = None
+    state.full_message_hasher.set_message(state.tx_prefix_hash)
+
     state.output_change = None
     gc.collect()
-    state.mem_trace(4)
+    mem_trace(4)
 
     # In the multisig mode here needs to be a check whether currently computed
     # transaction prefix matches expected transaction prefix sent in the
     # init step.
 
-    from trezor.messages import MoneroRingCtSig
-    from trezor.messages import MoneroTransactionAllOutSetAck
+    from trezor.messages import MoneroRingCtSig, MoneroTransactionAllOutSetAck
 
     # Initializes RCTsig structure (fee, tx prefix hash, type)
     rv_pb = MoneroRingCtSig(
@@ -57,7 +69,13 @@ async def all_outputs_set(state: State) -> MoneroTransactionAllOutSetAck:
         rv_type=state.tx_type,
     )
 
-    _out_pk(state)
+    # _out_pk
+    # Hashes out_pk into the full message.
+    if state.output_count != len(state.output_pk_commitments):
+        raise ValueError("Invalid number of ecdh")
+    for out in state.output_pk_commitments:
+        state.full_message_hasher.set_out_pk_commitment(out)
+
     state.full_message_hasher.rctsig_base_done()
     state.current_output_index = None
     state.current_input_index = -1
@@ -81,20 +99,23 @@ async def all_outputs_set(state: State) -> MoneroTransactionAllOutSetAck:
 
 
 def _validate(state: State) -> None:
+    out_money = state.summary_outs_money  # local_cache_attribute
+    in_money = state.summary_inputs_money  # local_cache_attribute
+
     if state.last_step != state.STEP_OUT:
         raise ValueError("Invalid state transition")
     if state.current_output_index + 1 != state.output_count:
         raise ValueError("Invalid out num")
 
     # Fee test
-    if state.fee != (state.summary_inputs_money - state.summary_outs_money):
+    if state.fee != (in_money - out_money):
         raise ValueError(
-            f"Fee invalid {state.fee} vs {state.summary_inputs_money - state.summary_outs_money}, out: {state.summary_outs_money}"
+            f"Fee invalid {state.fee} vs {in_money - out_money}, out: {out_money}"
         )
 
-    if state.summary_outs_money > state.summary_inputs_money:
+    if out_money > in_money:
         raise ValueError(
-            f"Transaction inputs money ({state.summary_inputs_money}) less than outputs money ({state.summary_outs_money})"
+            f"Transaction inputs money ({in_money}) less than outputs money ({out_money})"
         )
 
 
@@ -104,7 +125,12 @@ def _set_tx_extra(state: State) -> bytes:
     Extra field is supposed to be sorted (by sort_tx_extra() in the Monero)
     Tag ordering: TX_EXTRA_TAG_PUBKEY, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS, TX_EXTRA_NONCE
     """
+    from trezor import utils
+
+    from apps.monero.xmr import crypto
     from apps.monero.xmr.serialize import int_serialize
+
+    extra_nonce = state.extra_nonce  # local_cache_attribute
 
     # Extra buffer length computation
     # TX_EXTRA_TAG_PUBKEY (1B) | tx_pub_key (32B)
@@ -120,8 +146,8 @@ def _set_tx_extra(state: State) -> bytes:
         # TX_EXTRA_TAG_ADDITIONAL_PUBKEYS (1B) | varint | keys
         extra_size += 1 + len_size + 32 * num_keys
 
-    if state.extra_nonce:
-        extra_size += len(state.extra_nonce)
+    if extra_nonce:
+        extra_size += len(extra_nonce)
 
     extra = bytearray(extra_size)
     extra[0] = 1  # TX_EXTRA_TAG_PUBKEY
@@ -137,36 +163,8 @@ def _set_tx_extra(state: State) -> bytes:
             extra[offset : offset + 32] = state.additional_tx_public_keys[idx]
             offset += 32
 
-    if state.extra_nonce:
-        utils.memcpy(extra, offset, state.extra_nonce, 0, len(state.extra_nonce))
+    if extra_nonce:
+        utils.memcpy(extra, offset, extra_nonce, 0, len(extra_nonce))
         state.extra_nonce = None
 
     return extra
-
-
-def _set_tx_prefix(state: State, extra: bytes) -> None:
-    """
-    Adds `extra` to the tx_prefix_hash, which is the last needed item,
-    so the tx_prefix_hash is now complete and can be incorporated
-    into full_message_hash.
-    """
-    # Serializing "extra" type as BlobType.
-    # uvarint(len(extra)) || extra
-    state.tx_prefix_hasher.uvarint(len(extra))
-    state.tx_prefix_hasher.buffer(extra)
-
-    state.tx_prefix_hash = state.tx_prefix_hasher.get_digest()
-    state.tx_prefix_hasher = None
-
-    state.full_message_hasher.set_message(state.tx_prefix_hash)
-
-
-def _out_pk(state: State) -> None:
-    """
-    Hashes out_pk into the full message.
-    """
-    if state.output_count != len(state.output_pk_commitments):
-        raise ValueError("Invalid number of ecdh")
-
-    for out in state.output_pk_commitments:
-        state.full_message_hasher.set_out_pk_commitment(out)

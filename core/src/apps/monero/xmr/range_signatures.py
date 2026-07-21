@@ -11,22 +11,19 @@ Author: Dusan Klinec, ph4r05, 2018
 import gc
 from typing import TYPE_CHECKING
 
-from apps.monero.xmr import crypto, crypto_helpers
+from apps.monero.xmr import crypto
 
 if TYPE_CHECKING:
-    from apps.monero.xmr.serialize_messages.tx_rsig_bulletproof import (
-        Bulletproof,
-        BulletproofPlus,
-    )
+    from apps.monero.xmr.serialize_messages.tx_rsig_bulletproof import BulletproofPlus
 
 
 def prove_range_bp_batch(
-    amounts: list[int], masks: list[crypto.Scalar], bp_plus: bool = False
-) -> Bulletproof | BulletproofPlus:
+    amounts: list[int], masks: list[crypto.Scalar]
+) -> BulletproofPlus:
     """Calculates Bulletproof in batches"""
     from apps.monero.xmr import bulletproof as bp
 
-    bpi = bp.BulletProofPlusBuilder() if bp_plus else bp.BulletProofBuilder()
+    bpi = bp.BulletProofPlusBuilder()
     bp_proof = bpi.prove_batch([crypto.Scalar(a) for a in amounts], masks)
     del (bpi, bp)
     gc.collect()
@@ -35,12 +32,13 @@ def prove_range_bp_batch(
 
 
 def verify_bp(
-    bp_proof: Bulletproof | BulletproofPlus,
+    bp_proof: BulletproofPlus,
     amounts: list[int],
     masks: list[crypto.Scalar],
 ) -> bool:
     """Verifies Bulletproof"""
     from apps.monero.xmr import bulletproof as bp
+    from apps.monero.xmr import crypto_helpers
 
     if amounts:
         bp_proof.V = []
@@ -51,11 +49,8 @@ def verify_bp(
 
     from apps.monero.xmr.serialize_messages.tx_rsig_bulletproof import BulletproofPlus
 
-    bpi = (
-        bp.BulletProofPlusBuilder()
-        if isinstance(bp_proof, BulletproofPlus)
-        else bp.BulletProofBuilder()
-    )
+    assert isinstance(bp_proof, BulletproofPlus)
+    bpi = bp.BulletProofPlusBuilder()
     res = bpi.verify(bp_proof)
     gc.collect()
     return res

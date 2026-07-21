@@ -1,21 +1,23 @@
-from trezor import ui, wire
-from trezor.enums import ButtonRequestType
-from trezor.strings import format_plural
-from trezor.ui.layouts import confirm_action, show_pubkey
+async def require_get_public_key(
+    public_key: str, path: str, account: str | None
+) -> None:
+    from trezor.ui.layouts import show_pubkey
+
+    await show_pubkey(public_key, path=path, account=account)
 
 
-async def require_get_public_key(ctx: wire.Context, public_key: str) -> None:
-    await show_pubkey(ctx, public_key)
+async def require_sign_tx(num_actions: int) -> None:
+    from trezor import TR
+    from trezor.enums import ButtonRequestType
+    from trezor.strings import format_plural
+    from trezor.ui.layouts import confirm_action
 
-
-async def require_sign_tx(ctx: wire.Context, num_actions: int) -> None:
     await confirm_action(
-        ctx,
         "confirm_tx",
-        title="Sign transaction",
-        description="You are about to sign {}.",
-        description_param=format_plural("{count} {plural}", num_actions, "action"),
-        icon=ui.ICON_SEND,
-        icon_color=ui.GREEN,
+        TR.send__sign_transaction,
+        description=TR.eos__about_to_sign_template,
+        description_param=format_plural(
+            "{count} {plural}", num_actions, TR.plurals__sign_x_actions
+        ),
         br_code=ButtonRequestType.SignTx,
     )

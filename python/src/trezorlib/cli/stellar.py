@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -21,20 +21,20 @@ from typing import TYPE_CHECKING
 import click
 
 from .. import stellar, tools
-from . import with_client
+from . import with_session
 
 if TYPE_CHECKING:
-    from ..client import TrezorClient
+    from ..client import Session
 
 try:
     from stellar_sdk import (
-        parse_transaction_envelope_from_xdr,
         FeeBumpTransactionEnvelope,
+        parse_transaction_envelope_from_xdr,
     )
 except ImportError:
     pass
 
-PATH_HELP = "BIP32 path. Always use hardened paths and the m/44'/148'/ prefix"
+PATH_HELP = "BIP32 path. Always use hardened paths and the m/44h/148h/ prefix"
 
 
 @click.group(name="stellar")
@@ -51,11 +51,14 @@ def cli() -> None:
     default=stellar.DEFAULT_BIP32_PATH,
 )
 @click.option("-d", "--show-display", is_flag=True)
-@with_client
-def get_address(client: "TrezorClient", address: str, show_display: bool) -> str:
+@click.option("-C", "--chunkify", is_flag=True)
+@with_session
+def get_address(
+    session: "Session", address: str, show_display: bool, chunkify: bool
+) -> str:
     """Get Stellar public address."""
     address_n = tools.parse_path(address)
-    return stellar.get_address(client, address_n, show_display)
+    return stellar.get_address(session, address_n, show_display, chunkify)
 
 
 @cli.command()
@@ -74,9 +77,9 @@ def get_address(client: "TrezorClient", address: str, show_display: bool) -> str
     help="Network passphrase (blank for public network).",
 )
 @click.argument("b64envelope")
-@with_client
+@with_session
 def sign_transaction(
-    client: "TrezorClient", b64envelope: str, address: str, network_passphrase: str
+    session: "Session", b64envelope: str, address: str, network_passphrase: str
 ) -> bytes:
     """Sign a base64-encoded transaction envelope.
 
@@ -106,6 +109,6 @@ def sign_transaction(
 
     address_n = tools.parse_path(address)
     tx, operations = stellar.from_envelope(envelope)
-    resp = stellar.sign_tx(client, tx, operations, address_n, network_passphrase)
+    resp = stellar.sign_tx(session, tx, operations, address_n, network_passphrase)
 
     return base64.b64encode(resp.signature)

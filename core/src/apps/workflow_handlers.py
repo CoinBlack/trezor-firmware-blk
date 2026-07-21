@@ -1,11 +1,7 @@
 from typing import TYPE_CHECKING
 
-from trezor import utils
-from trezor.enums import MessageType
-
 if TYPE_CHECKING:
     from trezor.wire import Handler, Msg
-    from trezorio import WireInterface
 
 
 workflow_handlers: dict[int, Handler] = {}
@@ -16,7 +12,7 @@ def register(wire_type: int, handler: Handler[Msg]) -> None:
     workflow_handlers[wire_type] = handler
 
 
-def find_message_handler_module(msg_type: int) -> str:
+def _find_message_handler_module(msg_type: int) -> str:
     """Statically find the appropriate workflow handler.
 
     For now, new messages must be registered by hand in the if-elif manner below.
@@ -26,9 +22,18 @@ def find_message_handler_module(msg_type: int) -> str:
     - collecting everything as strings instead of importing directly means that we don't
       need to load any of the modules into memory until we actually need them
     """
+    from trezor import utils
+    from trezor.enums import MessageType
+
     # debug
     if __debug__ and msg_type == MessageType.LoadDevice:
         return "apps.debug.load_device"
+
+    # benchmark
+    if __debug__ and msg_type == MessageType.BenchmarkListNames:
+        return "apps.benchmark.list_names"
+    if __debug__ and msg_type == MessageType.BenchmarkRun:
+        return "apps.benchmark.run"
 
     # management
     if msg_type == MessageType.ResetDevice:
@@ -41,19 +46,39 @@ def find_message_handler_module(msg_type: int) -> str:
         return "apps.management.recovery_device"
     if msg_type == MessageType.ApplySettings:
         return "apps.management.apply_settings"
+    if msg_type == MessageType.ChangeLanguage:
+        return "apps.management.change_language"
     if msg_type == MessageType.ApplyFlags:
         return "apps.management.apply_flags"
     if msg_type == MessageType.ChangePin:
         return "apps.management.change_pin"
     if msg_type == MessageType.ChangeWipeCode:
         return "apps.management.change_wipe_code"
-    elif msg_type == MessageType.GetNonce:
+    if msg_type == MessageType.GetNonce:
         return "apps.management.get_nonce"
-    elif msg_type == MessageType.RebootToBootloader:
+    if utils.USE_SERIAL_NUMBER and msg_type == MessageType.GetSerialNumber:
+        return "apps.management.get_serial_number"
+    if msg_type == MessageType.RebootToBootloader:
         return "apps.management.reboot_to_bootloader"
 
-    if utils.MODEL in ("T",) and msg_type == MessageType.SdProtect:
+    if msg_type == MessageType.ShowDeviceTutorial:
+        return "apps.management.show_tutorial"
+
+    if utils.USE_TELEMETRY and msg_type == MessageType.TelemetryGet:
+        return "apps.telemetry.get_telemetry"
+
+    if utils.USE_BACKLIGHT and msg_type == MessageType.SetBrightness:
+        return "apps.management.set_brightness"
+
+    if utils.USE_SD_CARD and msg_type == MessageType.SdProtect:
         return "apps.management.sd_protect"
+
+    if utils.USE_OPTIGA and msg_type == MessageType.AuthenticateDevice:
+        return "apps.management.authenticate_device"
+
+    if utils.USE_BLE:
+        if msg_type == MessageType.BleUnpair:
+            return "apps.management.ble.unpair"
 
     # bitcoin
     if msg_type == MessageType.AuthorizeCoinJoin:
@@ -85,7 +110,33 @@ def find_message_handler_module(msg_type: int) -> str:
     if msg_type == MessageType.GetFirmwareHash:
         return "apps.misc.get_firmware_hash"
 
+    # evolu
+    if msg_type == MessageType.EvoluGetNode:
+        return "apps.evolu.get_node"
+    if msg_type == MessageType.EvoluSignRegistrationRequest:
+        return "apps.evolu.sign_registration_request"
+    if msg_type == MessageType.EvoluGetDelegatedIdentityKey:
+        return "apps.evolu.get_delegated_identity_key"
+    if msg_type == MessageType.PaymentNotification:
+        return "apps.misc.payment_notification"
+
     if not utils.BITCOIN_ONLY:
+        # When promoting the Nostr app to production-level
+        # and removing the "if" guard don't forget to also remove
+        # the corresponding guards (PYOPT == '0') in Sconscript.*
+        if __debug__:
+            # nostr
+            if msg_type == MessageType.NostrGetPubkey:
+                return "apps.nostr.get_pubkey"
+            if msg_type == MessageType.NostrSignEvent:
+                return "apps.nostr.sign_event"
+
+        # tron
+        if msg_type == MessageType.TronGetAddress:
+            return "apps.tron.get_address"
+        if msg_type == MessageType.TronSignTx:
+            return "apps.tron.sign_tx"
+
         if msg_type == MessageType.SetU2FCounter:
             return "apps.management.set_u2f_counter"
         if msg_type == MessageType.GetNextU2FCounter:
@@ -158,6 +209,8 @@ def find_message_handler_module(msg_type: int) -> str:
             return "apps.cardano.sign_tx"
         if msg_type == MessageType.CardanoGetNativeScriptHash:
             return "apps.cardano.get_native_script_hash"
+        if msg_type == MessageType.CardanoSignMessageInit:
+            return "apps.cardano.sign_message"
 
         # tezos
         if msg_type == MessageType.TezosGetAddress:
@@ -173,24 +226,24 @@ def find_message_handler_module(msg_type: int) -> str:
         if msg_type == MessageType.EosSignTx:
             return "apps.eos.sign_tx"
 
-        # binance
-        if msg_type == MessageType.BinanceGetAddress:
-            return "apps.binance.get_address"
-        if msg_type == MessageType.BinanceGetPublicKey:
-            return "apps.binance.get_public_key"
-        if msg_type == MessageType.BinanceSignTx:
-            return "apps.binance.sign_tx"
+        # solana
+        if msg_type == MessageType.SolanaGetPublicKey:
+            return "apps.solana.get_public_key"
+        if msg_type == MessageType.SolanaGetAddress:
+            return "apps.solana.get_address"
+        if msg_type == MessageType.SolanaSignTx:
+            return "apps.solana.sign_tx"
 
     raise ValueError
 
 
-def find_registered_handler(iface: WireInterface, msg_type: int) -> Handler | None:
+def find_registered_handler(msg_type: int) -> Handler | None:
     if msg_type in workflow_handlers:
         # Message has a handler available, return it directly.
         return workflow_handlers[msg_type]
 
     try:
-        modname = find_message_handler_module(msg_type)
+        modname = _find_message_handler_module(msg_type)
         handler_name = modname[modname.rfind(".") + 1 :]
         module = __import__(modname, None, None, (handler_name,), 0)
         return getattr(module, handler_name)

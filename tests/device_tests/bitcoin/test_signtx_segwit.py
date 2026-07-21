@@ -16,11 +16,13 @@
 
 import pytest
 
-from trezorlib import btc, messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib import btc, messages, models
+from trezorlib.debuglink import DebugSession as Session
 from trezorlib.exceptions import TrezorFailure
 from trezorlib.tools import H_, parse_path
 
+from ...common import is_core
+from ...input_flows import InputFlowConfirmAllWarnings
 from ...tx_cache import TxCache
 from .signtx import (
     assert_tx_matches,
@@ -45,7 +47,8 @@ TXHASH_e5040e = bytes.fromhex(
 )
 
 
-def test_send_p2sh(client: Client):
+@pytest.mark.parametrize("chunkify", (True, False))
+def test_send_p2sh(session: Session, chunkify: bool):
     inp1 = messages.TxInputType(
         address_n=parse_path("m/49h/1h/0h/1/0"),
         # 2N1LGaGg836mqSQqiuUBLfcyGBhyZbremDX
@@ -64,14 +67,16 @@ def test_send_p2sh(client: Client):
         script_type=messages.OutputScriptType.PAYTOADDRESS,
         amount=123_456_789 - 11_000 - 12_300_000,
     )
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 request_output(1),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(0),
                 request_meta(TXHASH_20912f),
@@ -86,7 +91,12 @@ def test_send_p2sh(client: Client):
             ]
         )
         _, serialized_tx = btc.sign_tx(
-            client, "Testnet", [inp1], [out1, out2], prev_txes=TX_API_TESTNET
+            session,
+            "Testnet",
+            [inp1],
+            [out1, out2],
+            prev_txes=TX_API_TESTNET,
+            chunkify=chunkify,
         )
 
     # Transaction does not exist on the blockchain, not using assert_tx_matches()
@@ -96,7 +106,7 @@ def test_send_p2sh(client: Client):
     )
 
 
-def test_send_p2sh_change(client: Client):
+def test_send_p2sh_change(session: Session):
     inp1 = messages.TxInputType(
         address_n=parse_path("m/49h/1h/0h/1/0"),
         # 2N1LGaGg836mqSQqiuUBLfcyGBhyZbremDX
@@ -115,12 +125,13 @@ def test_send_p2sh_change(client: Client):
         script_type=messages.OutputScriptType.PAYTOP2SHWITNESS,
         amount=123_456_789 - 11_000 - 12_300_000,
     )
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 request_output(1),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(0),
@@ -136,7 +147,7 @@ def test_send_p2sh_change(client: Client):
             ]
         )
         _, serialized_tx = btc.sign_tx(
-            client, "Testnet", [inp1], [out1, out2], prev_txes=TX_API_TESTNET
+            session, "Testnet", [inp1], [out1, out2], prev_txes=TX_API_TESTNET
         )
 
     # Transaction does not exist on the blockchain, not using assert_tx_matches()
@@ -146,11 +157,11 @@ def test_send_p2sh_change(client: Client):
     )
 
 
-def test_testnet_segwit_big_amount(client: Client):
+def test_testnet_segwit_big_amount(session: Session):
     # This test is testing transaction with amount bigger than fits to uint32
     address_n = parse_path("m/49h/1h/0h/0/0")
     address = btc.get_address(
-        client,
+        session,
         "Testnet",
         address_n,
         script_type=messages.InputScriptType.SPENDP2SHWITNESS,
@@ -169,12 +180,13 @@ def test_testnet_segwit_big_amount(client: Client):
         amount=2**32 + 1,
         script_type=messages.OutputScriptType.PAYTOADDRESS,
     )
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(0),
                 request_meta(prev_hash),
@@ -187,7 +199,7 @@ def test_testnet_segwit_big_amount(client: Client):
             ]
         )
         _, serialized_tx = btc.sign_tx(
-            client, "Testnet", [inp1], [out1], prev_txes={prev_hash: prev_tx}
+            session, "Testnet", [inp1], [out1], prev_txes={prev_hash: prev_tx}
         )
     # Transaction does not exist on the blockchain, not using assert_tx_matches()
     assert (
@@ -197,12 +209,12 @@ def test_testnet_segwit_big_amount(client: Client):
 
 
 @pytest.mark.multisig
-def test_send_multisig_1(client: Client):
+def test_send_multisig_1(session: Session):
     # input: 338e2d02e0eaf8848e38925904e51546cf22e58db5b1860c4a0e72b69c56afe5
 
     nodes = [
         btc.get_public_node(
-            client, parse_path(f"m/49h/1h/{i}h"), coin_name="Testnet"
+            session, parse_path(f"m/49h/1h/{i}h"), coin_name="Testnet"
         ).node
         for i in range(1, 4)
     ]
@@ -230,6 +242,7 @@ def test_send_multisig_1(client: Client):
         request_input(0),
         request_output(0),
         messages.ButtonRequest(code=B.ConfirmOutput),
+        (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
         messages.ButtonRequest(code=B.SignTx),
         request_input(0),
         request_meta(TXHASH_338e2d),
@@ -242,10 +255,10 @@ def test_send_multisig_1(client: Client):
         request_finished(),
     ]
 
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(expected_responses)
         signatures, _ = btc.sign_tx(
-            client, "Testnet", [inp1], [out1], prev_txes=TX_API_TESTNET
+            session, "Testnet", [inp1], [out1], prev_txes=TX_API_TESTNET
         )
 
     # store signature
@@ -253,10 +266,10 @@ def test_send_multisig_1(client: Client):
     # sign with third key
     inp1.address_n[2] = H_(3)
 
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(expected_responses)
         _, serialized_tx = btc.sign_tx(
-            client, "Testnet", [inp1], [out1], prev_txes=TX_API_TESTNET
+            session, "Testnet", [inp1], [out1], prev_txes=TX_API_TESTNET
         )
 
     assert_tx_matches(
@@ -266,11 +279,10 @@ def test_send_multisig_1(client: Client):
     )
 
 
-def test_attack_change_input_address(client: Client):
+def test_attack_change_input_address(session: Session):
     # Simulates an attack where the user is coerced into unknowingly
     # transferring funds from one account to another one of their accounts,
     # potentially resulting in privacy issues.
-
     inp1 = messages.TxInputType(
         address_n=parse_path("m/49h/1h/0h/1/0"),
         # 2N1LGaGg836mqSQqiuUBLfcyGBhyZbremDX
@@ -291,15 +303,17 @@ def test_attack_change_input_address(client: Client):
     )
 
     # Test if the transaction can be signed normally.
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_output(0),
                 # The user is required to confirm transfer to another account.
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 request_output(1),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(0),
                 request_meta(TXHASH_20912f),
@@ -314,7 +328,7 @@ def test_attack_change_input_address(client: Client):
             ]
         )
         _, serialized_tx = btc.sign_tx(
-            client, "Testnet", [inp1], [out1, out2], prev_txes=TX_API_TESTNET
+            session, "Testnet", [inp1], [out1, out2], prev_txes=TX_API_TESTNET
         )
 
     # Transaction does not exist on the blockchain, not using assert_tx_matches()
@@ -335,15 +349,15 @@ def test_attack_change_input_address(client: Client):
         return msg
 
     # Now run the attack, must trigger the exception
-    with client:
+    with session.test_ctx as client:
         client.set_filter(messages.TxAck, attack_processor)
         with pytest.raises(TrezorFailure):
             btc.sign_tx(
-                client, "Testnet", [inp1], [out1, out2], prev_txes=TX_API_TESTNET
+                session, "Testnet", [inp1], [out1, out2], prev_txes=TX_API_TESTNET
             )
 
 
-def test_attack_mixed_inputs(client: Client):
+def test_attack_mixed_inputs(session: Session):
     TRUE_AMOUNT = 123_456_789
     FAKE_AMOUNT = 120_000_000
 
@@ -374,6 +388,14 @@ def test_attack_mixed_inputs(client: Client):
         request_input(1),
         request_output(0),
         messages.ButtonRequest(code=messages.ButtonRequestType.ConfirmOutput),
+        (
+            is_core(session),
+            messages.ButtonRequest(code=messages.ButtonRequestType.ConfirmOutput),
+        ),
+        (
+            is_core(session),
+            messages.ButtonRequest(code=messages.ButtonRequestType.SignTx),
+        ),
         messages.ButtonRequest(code=messages.ButtonRequestType.FeeOverThreshold),
         messages.ButtonRequest(code=messages.ButtonRequestType.SignTx),
         request_input(0),
@@ -395,16 +417,19 @@ def test_attack_mixed_inputs(client: Client):
         request_finished(),
     ]
 
-    if client.features.model == "1":
+    if session.model is models.T1B1:
         # T1 asks for first input for witness again
         expected_responses.insert(-2, request_input(0))
 
-    with client:
+    with session.test_ctx as client:
+        if is_core(client):
+            IF = InputFlowConfirmAllWarnings(client)
+            client.set_input_flow(IF.get())
         # Sign unmodified transaction.
         # "Fee over threshold" warning is displayed - fee is the whole TRUE_AMOUNT
         client.set_expected_responses(expected_responses)
         btc.sign_tx(
-            client,
+            session,
             "Testnet",
             [inp1, inp2],
             [out1],
@@ -414,7 +439,7 @@ def test_attack_mixed_inputs(client: Client):
     # In Phase 1 make the user confirm a lower value of the segwit input.
     inp2.amount = FAKE_AMOUNT
 
-    if client.features.model == "1":
+    if session.model is models.T1B1:
         # T1 fails as soon as it encounters the fake amount.
         expected_responses = (
             expected_responses[:4] + expected_responses[5:15] + [messages.Failure()]
@@ -425,9 +450,12 @@ def test_attack_mixed_inputs(client: Client):
         )
 
     with pytest.raises(TrezorFailure) as e, client:
+        if is_core(client):
+            IF = InputFlowConfirmAllWarnings(client)
+            client.set_input_flow(IF.get())
         client.set_expected_responses(expected_responses)
         btc.sign_tx(
-            client,
+            session,
             "Testnet",
             [inp1, inp2],
             [out1],

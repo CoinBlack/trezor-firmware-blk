@@ -17,10 +17,11 @@
 import pytest
 
 from trezorlib import btc, messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib.debuglink import DebugSession as Session
 from trezorlib.exceptions import TrezorFailure
 from trezorlib.tools import parse_path
 
+from ...common import is_core
 from ...tx_cache import TxCache
 from .signtx import (
     request_extra_data,
@@ -56,7 +57,7 @@ FAKE_TXHASH_v4 = bytes.fromhex(
 pytestmark = [pytest.mark.altcoin, pytest.mark.zcash]
 
 
-def test_v3_not_supported(client: Client):
+def test_v3_not_supported(session: Session):
     # prevout: aaf51e4606c264e47e5c42c958fe4cf1539c5172684721e38e69f4ef634d75dc:1
     # input 1: 3.0 TAZ
 
@@ -74,9 +75,9 @@ def test_v3_not_supported(client: Client):
         script_type=messages.OutputScriptType.PAYTOADDRESS,
     )
 
-    with client, pytest.raises(TrezorFailure, match="DataError"):
+    with session.test_ctx, pytest.raises(TrezorFailure, match="DataError"):
         btc.sign_tx(
-            client,
+            session,
             "Zcash Testnet",
             [inp1],
             [out1],
@@ -87,7 +88,7 @@ def test_v3_not_supported(client: Client):
         )
 
 
-def test_one_one_fee_sapling(client: Client):
+def test_one_one_fee_sapling(session: Session):
     # prevout: e3820602226974b1dd87b7113cc8aea8c63e5ae29293991e7bfa80c126930368:0
     # input 1: 3.0 TAZ
 
@@ -105,12 +106,13 @@ def test_one_one_fee_sapling(client: Client):
         script_type=messages.OutputScriptType.PAYTOADDRESS,
     )
 
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(0),
                 request_meta(TXHASH_e38206),
@@ -126,7 +128,7 @@ def test_one_one_fee_sapling(client: Client):
         )
 
         _, serialized_tx = btc.sign_tx(
-            client,
+            session,
             "Zcash Testnet",
             [inp1],
             [out1],
@@ -143,7 +145,7 @@ def test_one_one_fee_sapling(client: Client):
     )
 
 
-def test_version_group_id_missing(client: Client):
+def test_version_group_id_missing(session: Session):
     inp1 = messages.TxInputType(
         # tmQoJ3PTXgQLaRRZZYT6xk8XtjRbr2kCqwu
         address_n=parse_path("m/44h/1h/0h/0/0"),
@@ -159,7 +161,7 @@ def test_version_group_id_missing(client: Client):
 
     with pytest.raises(TrezorFailure, match="Version group ID must be set."):
         btc.sign_tx(
-            client,
+            session,
             "Zcash Testnet",
             [inp1],
             [out1],
@@ -168,7 +170,7 @@ def test_version_group_id_missing(client: Client):
         )
 
 
-def test_spend_old_versions(client: Client):
+def test_spend_old_versions(session: Session):
     # NOTE: fake input tx used
 
     input_v1 = messages.TxInputType(
@@ -208,9 +210,9 @@ def test_spend_old_versions(client: Client):
         script_type=messages.OutputScriptType.PAYTOADDRESS,
     )
 
-    with client:
+    with session.test_ctx:
         _, serialized_tx = btc.sign_tx(
-            client,
+            session,
             "Zcash Testnet",
             inputs,
             [output],
@@ -226,8 +228,8 @@ def test_spend_old_versions(client: Client):
     )
 
 
-@pytest.mark.skip_t1
-def test_external_presigned(client: Client):
+@pytest.mark.models("core")
+def test_external_presigned(session: Session):
     inp1 = messages.TxInputType(
         # tmQoJ3PTXgQLaRRZZYT6xk8XtjRbr2kCqwu
         address_n=parse_path("m/44h/1h/0h/0/0"),
@@ -257,13 +259,14 @@ def test_external_presigned(client: Client):
         script_type=messages.OutputScriptType.PAYTOADDRESS,
     )
 
-    with client:
+    with session.test_ctx as client:
         client.set_expected_responses(
             [
                 request_input(0),
                 request_input(1),
                 request_output(0),
                 messages.ButtonRequest(code=B.ConfirmOutput),
+                (is_core(session), messages.ButtonRequest(code=B.ConfirmOutput)),
                 messages.ButtonRequest(code=B.SignTx),
                 request_input(0),
                 request_meta(TXHASH_e38206),
@@ -286,7 +289,7 @@ def test_external_presigned(client: Client):
         )
 
         _, serialized_tx = btc.sign_tx(
-            client,
+            session,
             "Zcash Testnet",
             [inp1, inp2],
             [out1],

@@ -1,97 +1,98 @@
 from typing import TYPE_CHECKING
 
-from storage.device import is_initialized
-from trezor import config, wire
-from trezor.messages import Success
-from trezor.ui.layouts import confirm_action, show_success
-
-from apps.common.request_pin import (
-    error_pin_invalid,
-    error_pin_matches_wipe_code,
-    request_pin_and_sd_salt,
-    request_pin_confirm,
-)
+from trezor import TR, config, utils, wire
 
 if TYPE_CHECKING:
     from typing import Awaitable
 
-    from trezor.messages import ChangePin
+    from trezor.messages import ChangePin, Success
 
 
-async def change_pin(ctx: wire.Context, msg: ChangePin) -> Success:
+async def change_pin(msg: ChangePin) -> Success:
+    from storage.device import is_initialized
+    from trezor.messages import Success
+    from trezor.ui.layouts import pin_wipe_code_exists_popup, success_pin_change
+
+    from apps.common.request_pin import (
+        error_pin_invalid,
+        error_pin_matches_wipe_code,
+        request_pin_and_sd_salt,
+        request_pin_confirm,
+    )
+
     if not is_initialized():
         raise wire.NotInitialized("Device is not initialized")
 
     # confirm that user wants to change the pin
-    await require_confirm_change_pin(ctx, msg)
+    await _require_confirm_change_pin(msg)
+
+    # Do not allow to remove the PIN if the wipe code is set.
+    if msg.remove and config.has_wipe_code():
+        await pin_wipe_code_exists_popup(
+            TR.pin__wipe_code_exists_title,
+            TR.pin__wipe_code_exists_description,
+            TR.buttons__continue,
+        )
+        raise RuntimeError  # should be unreachable
 
     # get old pin
-    curpin, salt = await request_pin_and_sd_salt(ctx, "Enter old PIN")
+    curpin, salt = await request_pin_and_sd_salt(TR.pin__enter)
 
-    # if changing pin, pre-check the entered pin before getting new pin
-    if curpin and not msg.remove:
+    # check the entered pin before getting new pin
+    if config.has_pin():
         if not config.check_pin(curpin, salt):
-            await error_pin_invalid(ctx)
+            await error_pin_invalid()
 
     # get new pin
     if not msg.remove:
-        newpin = await request_pin_confirm(ctx)
+        newpin = await request_pin_confirm()
     else:
         newpin = ""
 
     # write into storage
-    if not config.change_pin(curpin, newpin, salt, salt):
-        if newpin:
-            await error_pin_matches_wipe_code(ctx)
-        else:
-            await error_pin_invalid(ctx)
+    if not config.change_pin(newpin, salt):
+        await error_pin_matches_wipe_code()
+
+    utils.notify_send(utils.NOTIFY_PIN_CHANGE)
 
     if newpin:
         if curpin:
-            msg_screen = "You have successfully changed your PIN."
             msg_wire = "PIN changed"
         else:
-            msg_screen = "You have successfully enabled PIN protection."
             msg_wire = "PIN enabled"
     else:
-        msg_screen = "You have successfully disabled PIN protection."
         msg_wire = "PIN removed"
 
-    await show_success(ctx, "success_pin", msg_screen)
+    await success_pin_change(curpin, newpin)
     return Success(message=msg_wire)
 
 
-def require_confirm_change_pin(ctx: wire.Context, msg: ChangePin) -> Awaitable[None]:
+def _require_confirm_change_pin(msg: ChangePin) -> Awaitable[None]:
+    from trezor.ui.layouts import (
+        confirm_change_pin,
+        confirm_remove_pin,
+        confirm_set_new_code,
+    )
+
     has_pin = config.has_pin()
 
     if msg.remove and has_pin:  # removing pin
-        return confirm_action(
-            ctx,
-            "set_pin",
-            "Remove PIN",
-            description="Do you really want to",
-            action="disable PIN protection?",
-            reverse=True,
+        return confirm_remove_pin(
+            "disable_pin",
+            TR.pin__title_settings,
+            description=TR.pin__turn_off,
         )
 
     if not msg.remove and has_pin:  # changing pin
-        return confirm_action(
-            ctx,
-            "set_pin",
-            "Change PIN",
-            description="Do you really want to",
-            action="change your PIN?",
-            reverse=True,
+        return confirm_change_pin(
+            "change_pin",
+            TR.pin__title_settings,
+            description=TR.pin__change_question,
         )
 
     if not msg.remove and not has_pin:  # setting new pin
-        return confirm_action(
-            ctx,
-            "set_pin",
-            "Enable PIN",
-            description="Do you really want to",
-            action="enable PIN protection?",
-            reverse=True,
+        return confirm_set_new_code(
+            is_wipe_code=False,
         )
 
     # removing non-existing PIN

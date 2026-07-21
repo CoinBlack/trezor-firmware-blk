@@ -5,7 +5,8 @@ use core::{
 
 use crate::{
     error::Error,
-    micropython::{buffer::Buffer, gc::Gc, list::List, map::Map, obj::Obj, qstr::Qstr, util},
+    io::InputStream,
+    micropython::{buffer, gc::Gc, list::List, map::Map, obj::Obj, qstr::Qstr, util},
 };
 
 use super::{
@@ -15,32 +16,8 @@ use super::{
     zigzag,
 };
 
-#[no_mangle]
-pub extern "C" fn protobuf_type_for_name(name: Obj) -> Obj {
-    let block = || {
-        let name = Qstr::try_from(name)?;
-        let def = MsgDef::for_name(name.to_u16()).ok_or_else(|| Error::KeyError(name.into()))?;
-        let obj = MsgDefObj::alloc(def)?.into();
-        Ok(obj)
-    };
-    unsafe { util::try_or_raise(block) }
-}
-
-#[no_mangle]
-pub extern "C" fn protobuf_type_for_wire(wire_id: Obj) -> Obj {
-    let block = || {
-        let wire_id = u16::try_from(wire_id)?;
-        let def = MsgDef::for_wire_id(wire_id).ok_or_else(|| Error::KeyError(wire_id.into()))?;
-        let obj = MsgDefObj::alloc(def)?.into();
-        Ok(obj)
-    };
-    unsafe { util::try_or_raise(block) }
-}
-
-#[no_mangle]
 pub extern "C" fn protobuf_decode(buf: Obj, msg_def: Obj, enable_experimental: Obj) -> Obj {
     let block = || {
-        let buf = Buffer::try_from(buf)?;
         let def = Gc::<MsgDefObj>::try_from(msg_def)?;
         let enable_experimental = bool::try_from(enable_experimental)?;
 
@@ -52,7 +29,11 @@ pub extern "C" fn protobuf_decode(buf: Obj, msg_def: Obj, enable_experimental: O
             return Err(error::experimental_not_enabled());
         }
 
-        let stream = &mut InputStream::new(&buf);
+        // SAFETY:
+        // We assume that for the lifetime of `buf`, no MicroPython code can run that
+        // would mutate the buffer, nor pass it to another Rust function.
+        let buf = unsafe { buffer::get_buffer(buf) }?;
+        let stream = &mut InputStream::new(buf);
         let decoder = Decoder {
             enable_experimental,
         };
@@ -119,6 +100,9 @@ impl Decoder {
             let prim_type = u8::try_from(field_key & 7)?;
 
             match msg.field(field_tag) {
+                Some(field) if field.get_type().primitive_type() != prim_type => {
+                    return Err(error::invalid_value(field.name.into()));
+                }
                 Some(field) => {
                     let field_value = self.decode_field(stream, field)?;
                     let field_name = Qstr::from(field.name);
@@ -268,58 +252,5 @@ impl Decoder {
                 self.message_from_stream(sub_stream, &msg_type)
             }
         }
-    }
-}
-
-pub struct InputStream<'a> {
-    buf: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> InputStream<'a> {
-    pub fn new(buf: &'a [u8]) -> Self {
-        Self { buf, pos: 0 }
-    }
-
-    pub fn read_stream(&mut self, len: usize) -> Result<Self, Error> {
-        let buf = self
-            .buf
-            .get(self.pos..self.pos + len)
-            .ok_or_else(error::end_of_buffer)?;
-        self.pos += len;
-        Ok(Self::new(buf))
-    }
-
-    pub fn read(&mut self, len: usize) -> Result<&[u8], Error> {
-        let buf = self
-            .buf
-            .get(self.pos..self.pos + len)
-            .ok_or_else(error::end_of_buffer)?;
-        self.pos += len;
-        Ok(buf)
-    }
-
-    pub fn read_byte(&mut self) -> Result<u8, Error> {
-        let val = self
-            .buf
-            .get(self.pos)
-            .copied()
-            .ok_or_else(error::end_of_buffer)?;
-        self.pos += 1;
-        Ok(val)
-    }
-
-    pub fn read_uvarint(&mut self) -> Result<u64, Error> {
-        let mut uint = 0;
-        let mut shift = 0;
-        loop {
-            let byte = self.read_byte()?;
-            uint += (byte as u64 & 0x7F) << shift;
-            shift += 7;
-            if byte & 0x80 == 0 {
-                break;
-            }
-        }
-        Ok(uint)
     }
 }

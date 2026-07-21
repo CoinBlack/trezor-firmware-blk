@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -17,12 +17,11 @@
 from typing import TYPE_CHECKING
 
 from . import messages
-from .tools import expect
+from .tools import workflow
 
 if TYPE_CHECKING:
-    from .client import TrezorClient
+    from .client import Session
     from .tools import Address
-    from .protobuf import MessageType
 
 
 # MAINNET = 0
@@ -31,26 +30,32 @@ if TYPE_CHECKING:
 # FAKECHAIN = 3
 
 
-@expect(messages.MoneroAddress, field="address", ret_type=bytes)
+@workflow(capability=messages.Capability.Monero)
 def get_address(
-    client: "TrezorClient",
+    session: "Session",
     n: "Address",
     show_display: bool = False,
     network_type: messages.MoneroNetworkType = messages.MoneroNetworkType.MAINNET,
-) -> "MessageType":
-    return client.call(
+    chunkify: bool = False,
+) -> bytes:
+    return session.call(
         messages.MoneroGetAddress(
-            address_n=n, show_display=show_display, network_type=network_type
-        )
-    )
+            address_n=n,
+            show_display=show_display,
+            network_type=network_type,
+            chunkify=chunkify,
+        ),
+        expect=messages.MoneroAddress,
+    ).address
 
 
-@expect(messages.MoneroWatchKey)
+@workflow(capability=messages.Capability.Monero)
 def get_watch_key(
-    client: "TrezorClient",
+    session: "Session",
     n: "Address",
     network_type: messages.MoneroNetworkType = messages.MoneroNetworkType.MAINNET,
-) -> "MessageType":
-    return client.call(
-        messages.MoneroGetWatchKey(address_n=n, network_type=network_type)
+) -> messages.MoneroWatchKey:
+    return session.call(
+        messages.MoneroGetWatchKey(address_n=n, network_type=network_type),
+        expect=messages.MoneroWatchKey,
     )

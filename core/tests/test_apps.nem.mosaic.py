@@ -1,10 +1,13 @@
-from common import *
+# flake8: noqa: F403,F405
+from common import *  # isort:skip
 
 if not utils.BITCOIN_ONLY:
     from trezor.messages import NEMMosaic
+
     from apps.nem.mosaic.helpers import get_mosaic_definition
     from apps.nem.transfer import *
     from apps.nem.transfer.serialize import *
+    from apps.nem.transfer.serialize import _merge_mosaics
 
 
 def get_mosaic(namespace: str, quantity: int, mosaic: str) -> NEMMosaic:
@@ -15,9 +18,13 @@ def get_mosaic(namespace: str, quantity: int, mosaic: str) -> NEMMosaic:
     )
 
 
+# NOTE: copy-pasted from apps.nem.transfer.serialize.py
+def sort_mosaics(mosaics: list[NEMMosaic]) -> list[NEMMosaic]:
+    return sorted(mosaics, key=lambda m: (m.namespace, m.mosaic))
+
+
 @unittest.skipUnless(not utils.BITCOIN_ONLY, "altcoin")
 class TestNemMosaic(unittest.TestCase):
-
     def test_get_mosaic_definition(self):
         m = get_mosaic_definition("nem", "xem", 104)
         self.assertEqual(m.name, "NEM")
@@ -54,20 +61,20 @@ class TestNemMosaic(unittest.TestCase):
         b = get_mosaic("abc", 1, "mosaic")
         c = get_mosaic("abc", 2, "xxx")
 
-        merged = merge_mosaics([a, b])
+        merged = _merge_mosaics([a, b])
         self.assertEqual(merged[0].quantity, 2)
         self.assertEqual(len(merged), 1)
 
         a.quantity = 1
         b.quantity = 10
-        merged = merge_mosaics([a, b])
+        merged = _merge_mosaics([a, b])
         self.assertEqual(merged[0].quantity, 11)
 
         a.namespace = "abcdef"
-        merged = merge_mosaics([a, b])
+        merged = _merge_mosaics([a, b])
         self.assertEqual(len(merged), 2)
 
-        merged = merge_mosaics([a, b, c])
+        merged = _merge_mosaics([a, b, c])
         self.assertEqual(len(merged), 3)
 
         a.namespace = "abcdef"
@@ -79,7 +86,7 @@ class TestNemMosaic(unittest.TestCase):
         c.namespace = "abc"
         c.mosaic = "mosaic"
         c.quantity = 3
-        merged = merge_mosaics([a, b, c])
+        merged = _merge_mosaics([a, b, c])
         self.assertEqual(merged[0].quantity, 1)
         self.assertEqual(merged[1].quantity, 5)
         self.assertEqual(len(merged), 2)
@@ -93,7 +100,7 @@ class TestNemMosaic(unittest.TestCase):
         c.namespace = "abc"
         c.mosaic = "mosaic"
         c.quantity = 3
-        merged = merge_mosaics([a, b, c])
+        merged = _merge_mosaics([a, b, c])
         self.assertEqual(merged[0].quantity, 6)
         self.assertEqual(len(merged), 1)
 

@@ -36,6 +36,9 @@
 #include "rand.h"
 #include "rfc6979.h"
 #include "secp256k1.h"
+#ifdef USE_SECP256K1_ZKP_ECDSA
+#include "zkp_ecdsa.h"
+#endif
 
 // Set cp2 = cp1
 void point_copy(const curve_point *cp1, curve_point *cp2) { *cp2 = *cp1; }
@@ -415,13 +418,13 @@ int point_multiply(const ecdsa_curve *curve, const bignum256 *k,
   }
 
   int i = 0, j = 0;
-  static CONFIDENTIAL bignum256 a;
+  LOCAL_CONFIDENTIAL bignum256 a;
   uint32_t *aptr = NULL;
   uint32_t abits = 0;
   int ashift = 0;
   uint32_t is_even = (k->val[0] & 1) - 1;
   uint32_t bits = {0}, sign = {0}, nsign = {0};
-  static CONFIDENTIAL jacobian_curve_point jres;
+  LOCAL_CONFIDENTIAL jacobian_curve_point jres;
   curve_point pmult[8] = {0};
   const bignum256 *prime = &curve->prime;
 
@@ -541,10 +544,10 @@ int scalar_multiply(const ecdsa_curve *curve, const bignum256 *k,
   }
 
   int i = {0}, j = {0};
-  static CONFIDENTIAL bignum256 a;
+  LOCAL_CONFIDENTIAL bignum256 a;
   uint32_t is_even = (k->val[0] & 1) - 1;
   uint32_t lowbits = 0;
-  static CONFIDENTIAL jacobian_curve_point jres;
+  LOCAL_CONFIDENTIAL jacobian_curve_point jres;
   const bignum256 *prime = &curve->prime;
 
   // is_even = 0xffffffff if k is even, 0 otherwise.
@@ -632,8 +635,8 @@ int scalar_multiply(const ecdsa_curve *curve, const bignum256 *k,
 
 #endif
 
-int ecdh_multiply(const ecdsa_curve *curve, const uint8_t *priv_key,
-                  const uint8_t *pub_key, uint8_t *session_key) {
+int tc_ecdh_multiply(const ecdsa_curve *curve, const uint8_t *priv_key,
+                     const uint8_t *pub_key, uint8_t *session_key) {
   curve_point point = {0};
   if (!ecdsa_read_pubkey(curve, pub_key, &point)) {
     return 1;
@@ -676,9 +679,9 @@ int ecdsa_sign(const ecdsa_curve *curve, HasherType hasher_sign,
 // digest is 32 bytes of digest
 // is_canonical is an optional function that checks if the signature
 // conforms to additional coin-specific rules.
-int ecdsa_sign_digest(const ecdsa_curve *curve, const uint8_t *priv_key,
-                      const uint8_t *digest, uint8_t *sig, uint8_t *pby,
-                      int (*is_canonical)(uint8_t by, uint8_t sig[64])) {
+int tc_ecdsa_sign_digest(const ecdsa_curve *curve, const uint8_t *priv_key,
+                         const uint8_t *digest, uint8_t *sig, uint8_t *pby,
+                         int (*is_canonical)(uint8_t by, uint8_t sig[64])) {
   int i = 0;
   curve_point R = {0};
   bignum256 k = {0}, z = {0}, randk = {0};
@@ -782,8 +785,8 @@ int ecdsa_sign_digest(const ecdsa_curve *curve, const uint8_t *priv_key,
 }
 
 // returns 0 on success
-int ecdsa_get_public_key33(const ecdsa_curve *curve, const uint8_t *priv_key,
-                           uint8_t *pub_key) {
+int tc_ecdsa_get_public_key33(const ecdsa_curve *curve, const uint8_t *priv_key,
+                              uint8_t *pub_key) {
   curve_point R = {0};
   bignum256 k = {0};
 
@@ -807,8 +810,8 @@ int ecdsa_get_public_key33(const ecdsa_curve *curve, const uint8_t *priv_key,
 }
 
 // returns 0 on success
-int ecdsa_get_public_key65(const ecdsa_curve *curve, const uint8_t *priv_key,
-                           uint8_t *pub_key) {
+int tc_ecdsa_get_public_key65(const ecdsa_curve *curve, const uint8_t *priv_key,
+                              uint8_t *pub_key) {
   curve_point R = {0};
   bignum256 k = {0};
 
@@ -1019,9 +1022,9 @@ int ecdsa_verify(const ecdsa_curve *curve, HasherType hasher_sign,
 
 // Compute public key from signature and recovery id.
 // returns 0 if the key is successfully recovered
-int ecdsa_recover_pub_from_sig(const ecdsa_curve *curve, uint8_t *pub_key,
-                               const uint8_t *sig, const uint8_t *digest,
-                               int recid) {
+int tc_ecdsa_recover_pub_from_sig(const ecdsa_curve *curve, uint8_t *pub_key,
+                                  const uint8_t *sig, const uint8_t *digest,
+                                  int recid) {
   bignum256 r = {0}, s = {0}, e = {0};
   curve_point cp = {0}, cp2 = {0};
 
@@ -1076,8 +1079,8 @@ int ecdsa_recover_pub_from_sig(const ecdsa_curve *curve, uint8_t *pub_key,
 }
 
 // returns 0 if verification succeeded
-int ecdsa_verify_digest(const ecdsa_curve *curve, const uint8_t *pub_key,
-                        const uint8_t *sig, const uint8_t *digest) {
+int tc_ecdsa_verify_digest(const ecdsa_curve *curve, const uint8_t *pub_key,
+                           const uint8_t *sig, const uint8_t *digest) {
   curve_point pub = {0}, res = {0};
   bignum256 r = {0}, s = {0}, z = {0};
   int result = 0;
@@ -1109,9 +1112,6 @@ int ecdsa_verify_digest(const ecdsa_curve *curve, const uint8_t *pub_key,
     bn_inverse(&s, &curve->order);       // s = s^-1
     bn_multiply(&s, &z, &curve->order);  // z = z * s  [u1 = z * s^-1 mod n]
     bn_mod(&z, &curve->order);
-  }
-
-  if (result == 0) {
     bn_multiply(&r, &s, &curve->order);  // s = r * s  [u2 = r * s^-1 mod n]
     bn_mod(&s, &curve->order);
     scalar_multiply(curve, &z, &res);       // res = z * G    [= u1 * G]
@@ -1139,6 +1139,49 @@ int ecdsa_verify_digest(const ecdsa_curve *curve, const uint8_t *pub_key,
   memzero(&z, sizeof(z));
 
   // all OK
+  return result;
+}
+
+ecdsa_tweak_pubkey_result tc_ecdsa_tweak_pubkey(
+    const ecdsa_curve *curve, const uint8_t *public_key_bytes,
+    const uint8_t *tweak_bytes, uint8_t *tweaked_public_key_bytes) {
+  int result = ECDSA_TWEAK_PUBKEY_SUCCESS;
+  curve_point public_key = {0};
+  bignum256 tweak = {0};
+  curve_point public_tweak = {0};
+
+  if (public_key_bytes[0] != 0x02 && public_key_bytes[0] != 0x03) {
+    result = ECDSA_TWEAK_PUBKEY_INVALID_PUBKEY_ERR;
+    goto end;
+  }
+
+  if (!ecdsa_read_pubkey(curve, public_key_bytes, &public_key)) {
+    result = ECDSA_TWEAK_PUBKEY_INVALID_PUBKEY_ERR;
+    goto end;
+  }
+
+  bn_read_be(tweak_bytes, &tweak);
+  if (!bn_is_less(&tweak, &curve->order)) {
+    result = ECDSA_TWEAK_PUBKEY_INVALID_TWEAK_OR_RESULT_ERR;
+    goto end;
+  }
+
+  (void)scalar_multiply(curve, &tweak, &public_tweak);
+  point_add(curve, &public_tweak, &public_key);
+
+  if (point_is_infinity(&public_key)) {
+    result = ECDSA_TWEAK_PUBKEY_INVALID_TWEAK_OR_RESULT_ERR;
+    goto end;
+  }
+
+  tweaked_public_key_bytes[0] = 0x02 | (public_key.y.val[0] & 0x01);
+  bn_write_be(&public_key.x, tweaked_public_key_bytes + 1);
+
+end:
+  memzero(&public_key, sizeof(public_key));
+  memzero(&tweak, sizeof(tweak));
+  memzero(&public_tweak, sizeof(public_tweak));
+
   return result;
 }
 
@@ -1201,8 +1244,8 @@ int ecdsa_sig_to_der(const uint8_t *sig, uint8_t *der) {
   return *len + 2;
 }
 
-// Parse a DER-encoded signature. We don't check whether the encoded integers
-// satisfy DER requirements regarding leading zeros.
+// Parse a DER-encoded signature. We check whether the encoded integers satisfy
+// DER requirements regarding leading zeros.
 int ecdsa_sig_from_der(const uint8_t *der, size_t der_len, uint8_t sig[64]) {
   memzero(sig, 64);
 
@@ -1226,10 +1269,20 @@ int ecdsa_sig_from_der(const uint8_t *der, size_t der_len, uint8_t sig[64]) {
       return 1;
     }
 
-    // Skip a possible leading zero.
-    if (int_len != 0 && der[pos] == 0) {
+    // Positive integers must not start with an octet that has bit 8 set to 1.
+    if (int_len == 0 || der[pos] > 0x7f) {
+      return 1;
+    }
+
+    // Skip a possible leading null octet.
+    if (int_len > 1 && der[pos] == 0x00) {
       int_len--;
       pos++;
+
+      // Check that integer uses the shortest possible encoding.
+      if (der[pos] < 0x80) {
+        return 1;
+      }
     }
 
     // Copy the integer to the output, making sure it fits.
@@ -1248,4 +1301,160 @@ int ecdsa_sig_from_der(const uint8_t *der, size_t der_len, uint8_t sig[64]) {
   }
 
   return 0;
+}
+
+int ecdsa_get_public_key33(const ecdsa_curve *curve, const uint8_t *priv_key,
+                           uint8_t *pub_key) {
+#ifdef USE_SECP256K1_ZKP_ECDSA
+  if (curve == &secp256k1) {
+    return zkp_ecdsa_get_public_key33(curve, priv_key, pub_key);
+  }
+#endif
+  return tc_ecdsa_get_public_key33(curve, priv_key, pub_key);
+}
+
+int ecdsa_get_public_key65(const ecdsa_curve *curve, const uint8_t *priv_key,
+                           uint8_t *pub_key) {
+#ifdef USE_SECP256K1_ZKP_ECDSA
+  if (curve == &secp256k1) {
+    return zkp_ecdsa_get_public_key65(curve, priv_key, pub_key);
+  }
+#endif
+  return tc_ecdsa_get_public_key65(curve, priv_key, pub_key);
+}
+
+int ecdsa_sign_digest(const ecdsa_curve *curve, const uint8_t *priv_key,
+                      const uint8_t *digest, uint8_t *sig, uint8_t *pby,
+                      int (*is_canonical)(uint8_t by, uint8_t sig[64])) {
+#ifdef USE_SECP256K1_ZKP_ECDSA
+  if (curve == &secp256k1) {
+    return zkp_ecdsa_sign_digest(curve, priv_key, digest, sig, pby,
+                                 is_canonical);
+  }
+#endif
+  return tc_ecdsa_sign_digest(curve, priv_key, digest, sig, pby, is_canonical);
+}
+
+int ecdsa_verify_digest(const ecdsa_curve *curve, const uint8_t *pub_key,
+                        const uint8_t *sig, const uint8_t *digest) {
+#ifdef USE_SECP256K1_ZKP_ECDSA
+  if (curve == &secp256k1) {
+    return zkp_ecdsa_verify_digest(curve, pub_key, sig, digest);
+  }
+#endif
+  return tc_ecdsa_verify_digest(curve, pub_key, sig, digest);
+}
+
+int ecdsa_recover_pub_from_sig(const ecdsa_curve *curve, uint8_t *pub_key,
+                               const uint8_t *sig, const uint8_t *digest,
+                               int recid) {
+#ifdef USE_SECP256K1_ZKP_ECDSA
+  if (curve == &secp256k1) {
+    return zkp_ecdsa_recover_pub_from_sig(curve, pub_key, sig, digest, recid);
+  }
+#endif
+  return tc_ecdsa_recover_pub_from_sig(curve, pub_key, sig, digest, recid);
+}
+
+int ecdh_multiply(const ecdsa_curve *curve, const uint8_t *priv_key,
+                  const uint8_t *pub_key, uint8_t *session_key) {
+#ifdef USE_SECP256K1_ZKP_ECDSA
+  if (curve == &secp256k1) {
+    return zkp_ecdh_multiply(curve, priv_key, pub_key, session_key);
+  }
+#endif
+  return tc_ecdh_multiply(curve, priv_key, pub_key, session_key);
+}
+
+ecdsa_tweak_pubkey_result ecdsa_tweak_pubkey(const ecdsa_curve *curve,
+                                             const uint8_t *pub_key,
+                                             const uint8_t *tweak,
+                                             uint8_t *tweaked_pub_key) {
+#ifdef USE_SECP256K1_ZKP_ECDSA
+  if (curve == &secp256k1) {
+    return zkp_ecdsa_tweak_pubkey(curve, pub_key, tweak, tweaked_pub_key);
+  }
+#endif
+  return tc_ecdsa_tweak_pubkey(curve, pub_key, tweak, tweaked_pub_key);
+}
+
+int ecdsa_mask_scalar(const ecdsa_curve *curve,
+                      const uint8_t masking_key[ECDSA_PRIVATE_KEY_SIZE],
+                      const uint8_t scalar[ECDSA_PRIVATE_KEY_SIZE],
+                      uint8_t masked_scalar[ECDSA_PRIVATE_KEY_SIZE]) {
+  bignum256 k = {0};
+  bn_read_be(masking_key, &k);
+  if (bn_is_zero(&k) || !bn_is_less(&k, &curve->order)) {
+    // Invalid masking key.
+    memzero(&k, sizeof(k));
+    return 1;
+  }
+
+  bignum256 s = {0};
+  bn_read_be(scalar, &s);
+  bn_multiply(&k, &s, &curve->order);  // s = s * k
+  bn_mod(&s, &curve->order);
+  bn_write_be(&s, masked_scalar);
+  memzero(&k, sizeof(k));
+  memzero(&s, sizeof(s));
+  return 0;
+}
+
+int ecdsa_unmask_scalar(const ecdsa_curve *curve,
+                        const uint8_t masking_key[ECDSA_PRIVATE_KEY_SIZE],
+                        const uint8_t masked_scalar[ECDSA_PRIVATE_KEY_SIZE],
+                        uint8_t scalar[ECDSA_PRIVATE_KEY_SIZE]) {
+  bignum256 k = {0};
+  bn_read_be(masking_key, &k);
+  if (bn_is_zero(&k) || !bn_is_less(&k, &curve->order)) {
+    // Invalid masking key.
+    memzero(&k, sizeof(k));
+    return 1;
+  }
+
+  bignum256 s = {0};
+  bn_read_be(masked_scalar, &s);
+  bn_inverse(&k, &curve->order);       // k = k^-1
+  bn_multiply(&k, &s, &curve->order);  // s = s * k
+  bn_mod(&s, &curve->order);
+  bn_write_be(&s, scalar);
+  memzero(&k, sizeof(k));
+  memzero(&s, sizeof(s));
+  return 0;
+}
+
+// masked_pub_key may be compressed or uncompressed
+int ecdsa_unmask_public_key(const ecdsa_curve *curve,
+                            const uint8_t masking_key[ECDSA_PRIVATE_KEY_SIZE],
+                            const uint8_t *masked_pub_key,
+                            uint8_t pub_key[ECDSA_PUBLIC_KEY_SIZE]) {
+  int ret = 0;
+
+  curve_point point = {0};
+  if (!ecdsa_read_pubkey(curve, masked_pub_key, &point)) {
+    // Invalid public key.
+    ret = 1;
+    goto cleanup;
+  }
+
+  bignum256 k = {0};
+  bn_read_be(masking_key, &k);
+  if (bn_is_zero(&k) || !bn_is_less(&k, &curve->order)) {
+    // Invalid masking key.
+    ret = 2;
+    goto cleanup;
+  }
+
+  bn_inverse(&k, &curve->order);
+  bn_mod(&k, &curve->order);
+  point_multiply(curve, &k, &point, &point);
+
+  pub_key[0] = 0x04;
+  bn_write_be(&point.x, pub_key + 1);
+  bn_write_be(&point.y, pub_key + 33);
+
+cleanup:
+  memzero(&point, sizeof(point));
+  memzero(&k, sizeof(k));
+  return ret;
 }

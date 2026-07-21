@@ -1,50 +1,42 @@
-import sys
 from typing import TYPE_CHECKING
 
-from trezor import wire
 from trezor.crypto import bip32
+from trezor.wire import DataError
 
 from . import paths, safety_checks
-from .seed import Slip21Node, get_seed
 
 if TYPE_CHECKING:
-    from typing import (
-        Any,
-        Awaitable,
-        Callable,
-        Iterable,
-        TypeVar,
-    )
-    from typing_extensions import Protocol
+    from typing import Any, Awaitable, Callable, Iterable, TypeVar
 
     from trezor.protobuf import MessageType
+    from typing_extensions import Protocol
+
+    from .seed import Slip21Node
 
     T = TypeVar("T")
 
     class NodeProtocol(Protocol[paths.PathType]):
-        def derive_path(self, path: paths.PathType) -> None:
-            ...
+        def derive_path(self, path: paths.PathType) -> None: ...
 
-        def clone(self: T) -> T:
-            ...
+        def clone(self: T) -> T: ...
 
-        def __del__(self) -> None:
-            ...
+        def __del__(self) -> None: ...
 
     NodeType = TypeVar("NodeType", bound=NodeProtocol)
 
     MsgIn = TypeVar("MsgIn", bound=MessageType)
     MsgOut = TypeVar("MsgOut", bound=MessageType)
 
-    Handler = Callable[[wire.Context, MsgIn], Awaitable[MsgOut]]
-    HandlerWithKeychain = Callable[[wire.Context, MsgIn, "Keychain"], Awaitable[MsgOut]]
+    Handler = Callable[[MsgIn], Awaitable[MsgOut]]
+    HandlerWithKeychain = Callable[[MsgIn, "Keychain"], Awaitable[MsgOut]]
 
     class Deletable(Protocol):
-        def __del__(self) -> None:
-            ...
+        def __del__(self) -> None: ...
 
 
-FORBIDDEN_KEY_PATH = wire.DataError("Forbidden key path")
+class ForbiddenKeyPath(DataError):
+    def __init__(self) -> None:
+        super().__init__("Forbidden key path")
 
 
 class LRUCache:
@@ -54,13 +46,15 @@ class LRUCache:
         self.cache: dict[Any, Deletable] = {}
 
     def insert(self, key: Any, value: Deletable) -> None:
-        if key in self.cache_keys:
-            self.cache_keys.remove(key)
-        self.cache_keys.insert(0, key)
+        cache_keys = self.cache_keys  # local_cache_attribute
+
+        if key in cache_keys:
+            cache_keys.remove(key)
+        cache_keys.insert(0, key)
         self.cache[key] = value
 
-        if len(self.cache_keys) > self.size:
-            dropped_key = self.cache_keys.pop()
+        if len(cache_keys) > self.size:
+            dropped_key = cache_keys.pop()
             self.cache[dropped_key].__del__()
             del self.cache[dropped_key]
 
@@ -103,7 +97,7 @@ class Keychain:
 
     def verify_path(self, path: paths.Bip32Path) -> None:
         if "ed25519" in self.curve and not paths.path_is_hardened(path):
-            raise wire.DataError("Non-hardened paths unsupported on Ed25519")
+            raise DataError("Non-hardened paths unsupported on Ed25519")
 
         if not safety_checks.is_strict():
             return
@@ -111,7 +105,16 @@ class Keychain:
         if self.is_in_keychain(path):
             return
 
-        raise FORBIDDEN_KEY_PATH
+        raise ForbiddenKeyPath()
+
+    def verify_slip21_path(self, path: paths.Slip21Path) -> None:
+        if not safety_checks.is_strict():
+            return
+
+        if any(ns == path[: len(ns)] for ns in self.slip21_namespaces):
+            return
+
+        raise ForbiddenKeyPath()
 
     def is_in_keychain(self, path: paths.Bip32Path) -> bool:
         return any(schema.match(path) for schema in self.schemas)
@@ -137,8 +140,8 @@ class Keychain:
         if self._root_fingerprint is None:
             # derive m/0' to obtain root_fingerprint
             n = self._derive_with_cache(
-                prefix_len=0,
-                path=[0 | paths.HARDENED],
+                0,
+                [0 | paths.HARDENED],
                 new_root=lambda: bip32.from_seed(self.seed, self.curve),
             )
             self._root_fingerprint = n.fingerprint()
@@ -147,20 +150,19 @@ class Keychain:
     def derive(self, path: paths.Bip32Path) -> bip32.HDNode:
         self.verify_path(path)
         return self._derive_with_cache(
-            prefix_len=3,
-            path=path,
+            3,
+            path,
             new_root=lambda: bip32.from_seed(self.seed, self.curve),
         )
 
     def derive_slip21(self, path: paths.Slip21Path) -> Slip21Node:
-        if safety_checks.is_strict() and not any(
-            ns == path[: len(ns)] for ns in self.slip21_namespaces
-        ):
-            raise FORBIDDEN_KEY_PATH
+        from .seed import Slip21Node
+
+        self.verify_slip21_path(path)
 
         return self._derive_with_cache(
-            prefix_len=1,
-            path=path,
+            1,
+            path,
             new_root=lambda: Slip21Node(seed=self.seed),
         )
 
@@ -172,40 +174,39 @@ class Keychain:
 
 
 async def get_keychain(
-    ctx: wire.Context,
     curve: str,
     schemas: Iterable[paths.PathSchemaType],
     slip21_namespaces: Iterable[paths.Slip21Path] = (),
 ) -> Keychain:
-    seed = await get_seed(ctx)
+    from .seed import get_seed
+
+    seed = await get_seed()
     keychain = Keychain(seed, curve, schemas, slip21_namespaces)
     return keychain
 
 
 def with_slip44_keychain(
     *patterns: str,
-    slip44_id: int,
+    slip44_id: int | None = None,
     curve: str = "secp256k1",
     allow_testnet: bool = True,
+    slip21_namespaces: Iterable[paths.Slip21Path] = (),
 ) -> Callable[[HandlerWithKeychain[MsgIn, MsgOut]], Handler[MsgIn, MsgOut]]:
-    if not patterns:
-        raise ValueError  # specify a pattern
-
-    if allow_testnet:
-        slip44_ids: int | tuple[int, int] = (slip44_id, 1)
+    if slip44_id is not None:
+        slip44_ids = (slip44_id, 1) if allow_testnet else slip44_id
     else:
-        slip44_ids = slip44_id
+        slip44_ids = tuple()
 
     schemas = []
     for pattern in patterns:
-        schemas.append(paths.PathSchema.parse(pattern=pattern, slip44_id=slip44_ids))
+        schemas.append(paths.PathSchema.parse(pattern, slip44_ids))
     schemas = [s.copy() for s in schemas]
 
     def decorator(func: HandlerWithKeychain[MsgIn, MsgOut]) -> Handler[MsgIn, MsgOut]:
-        async def wrapper(ctx: wire.Context, msg: MsgIn) -> MsgOut:
-            keychain = await get_keychain(ctx, curve, schemas)
+        async def wrapper(msg: MsgIn) -> MsgOut:
+            keychain = await get_keychain(curve, schemas, slip21_namespaces)
             with keychain:
-                return await func(ctx, msg, keychain)
+                return await func(msg, keychain)
 
         return wrapper
 
@@ -213,8 +214,12 @@ def with_slip44_keychain(
 
 
 def auto_keychain(
-    modname: str, allow_testnet: bool = True
+    modname: str,
+    allow_testnet: bool = True,
+    slip21_namespaces: Iterable[paths.Slip21Path] = (),
 ) -> Callable[[HandlerWithKeychain[MsgIn, MsgOut]], Handler[MsgIn, MsgOut]]:
+    import sys
+
     rdot = modname.rfind(".")
     parent_modname = modname[:rdot]
     parent_module = sys.modules[parent_modname]
@@ -223,5 +228,9 @@ def auto_keychain(
     curve = getattr(parent_module, "CURVE")
     slip44_id = getattr(parent_module, "SLIP44_ID")
     return with_slip44_keychain(
-        pattern, slip44_id=slip44_id, curve=curve, allow_testnet=allow_testnet
+        pattern,
+        slip44_id=slip44_id,
+        curve=curve,
+        allow_testnet=allow_testnet,
+        slip21_namespaces=slip21_namespaces,
     )

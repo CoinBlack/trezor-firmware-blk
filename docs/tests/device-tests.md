@@ -2,27 +2,26 @@
 
 ## 1. Running the full test suite
 
-_Note: You need Poetry, as mentioned in the core's [documentation](https://docs.trezor.io/trezor-firmware/core/) section._
+_Note: You need Uv, as mentioned in the core's [documentation](https://docs.trezor.io/trezor-firmware/core/) section._
 
 In the `trezor-firmware` checkout, in the root of the monorepo, install the environment:
 
 ```sh
-poetry install
+uv sync
 ```
 
 And run the automated tests:
 
 ```sh
-poetry run make -C core test_emu
+uv run make -C core test_emu
 ```
 
 ## 2. Running tests manually
 
-Install the poetry environment as outlined above. Then switch to a shell inside the
-environment:
+Install the `uv` environment as outlined above. Then activate the environment:
 
 ```sh
-poetry shell
+source .venv/bin/activate
 ```
 
 If you want to test against the emulator, run it in a separate terminal:
@@ -103,14 +102,33 @@ the following marker:
 @pytest.mark.newcoin
 ```
 
-This marker must be registered in [REGISTERED_MARKERS] file.
+This marker must be registered in `REGISTERED_MARKERS` file in `tests` folder.
 
-If you wish to run a test only on TT, mark it with `@pytest.mark.skip_t1`.
-If the test should only run on T1, mark it with `@pytest.mark.skip_t2`.
-You must not use both on the same test.
+Tests can be run only for specific models. The marker `@pytest.mark.models()` can be
+used to narrow the selection:
+
+* `@pytest.mark.models("t3b1", "t2t1)` - only for Safe 3 rev2 and Trezor T
+* `@pytest.mark.models("core")` - only for trezor-core models (skip Trezor One)
+* `@pytest.mark.models(skip="t3t1")` - for all models except Safe 5
+* `@pytest.mark.models("core", skip="t3t1")` - for all trezor-core models except Safe 5
+
+Arguments can be a list of internal model names, or one of the following shortcuts:
+
+* `core` - all trezor-core models
+* `legacy` - just Trezor One
+* `safe` - Trezor Safe family
+* `safe3` - Trezor Safe 3 (covers T2B1 and T2T1)
+* `delizia` - covers the `delizia` UI (currently T3T1 only)
+* `eckhart` - covers the `eckhart` UI (currently T3W1 only)
+
+You can specify a list as positional arguments, and exclude from it via `skip` keyword argument.
+
+You can provide a list of strings, a list of `TrezorModel` instances, or a
+comma-separated string of model names or shortcuts.
+
+You can specify a skip reason as `reason="TODO implement for Delizia too"`.
 
 [pytest-random-order]: https://pypi.org/project/pytest-random-order/
-[REGISTERED_MARKERS]: ../../tests/REGISTERED_MARKERS
 
 ## Extended testing and debugging
 
@@ -127,7 +145,7 @@ The final executable is significantly slower due to ASAN(Address Sanitizer) inte
 If you want to catch some memory errors use this.
 
 ```sh
-time ASAN_OPTIONS=verbosity=1:detect_invalid_pointer_pairs=1:strict_init_order=true:strict_string_checks=true TREZOR_PROFILE="" poetry run make test_emu
+time ASAN_OPTIONS=verbosity=1:detect_invalid_pointer_pairs=1:strict_init_order=true:strict_string_checks=true TREZOR_PROFILE="" uv run make test_emu
 ```
 
 ### Coverage (Emulator only)
@@ -145,3 +163,11 @@ Run the tests with coverage output.
 ```sh
 make build_unix && make coverage
 ```
+
+### GC leak check (both Emulator and Hardware)
+
+DebugLink interface supports polling the device for its current [GC-related information](https://github.com/trezor/trezor-firmware/pull/5091).
+
+On every test setup/teardown, we check for whether the free memory has decreased (indicating that the GC didn't free all allocated heap memory).
+
+By default, the test will fail if a leak is detected. In order to issue a warning instead, use `--ignore-gc-leak` CLI flag.

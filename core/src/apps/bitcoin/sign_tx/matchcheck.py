@@ -1,15 +1,17 @@
 from typing import TYPE_CHECKING
 
-from trezor import wire
+from trezor.enums import InputScriptType
+from trezor.messages import TxOutput
 from trezor.utils import ensure
 
-from .. import multisig
-from ..common import BIP32_WALLET_DEPTH
+from ..common import BIP32_WALLET_DEPTH, CHANGE_OUTPUT_TO_INPUT_SCRIPT_TYPES
 
 if TYPE_CHECKING:
     from typing import Any, Generic, TypeVar
 
-    from trezor.messages import TxInput, TxOutput
+    from trezor.messages import TxInput
+
+    from apps.common.paths import Bip32Path
 
     T = TypeVar("T")
 else:
@@ -49,8 +51,7 @@ class MatchChecker(Generic[T]):
 
     def attribute_from_tx(self, txio: TxInput | TxOutput) -> T:
         # Return the attribute from the txio, which is to be used for matching.
-        # If the txio is invalid for matching, then return an object which
-        # evaluates as a boolean False.
+        # If the txio is invalid for matching, then return None.
         raise NotImplementedError
 
     def add_input(self, txi: TxInput) -> None:
@@ -60,7 +61,7 @@ class MatchChecker(Generic[T]):
             return  # There was a mismatch in previous inputs.
 
         added_attribute = self.attribute_from_tx(txi)
-        if not added_attribute:
+        if added_attribute is None:
             self.attribute = self.MISMATCH  # The added input is invalid for matching.
         elif self.attribute is self.UNDEFINED:
             self.attribute = added_attribute  # This is the first input.
@@ -68,6 +69,8 @@ class MatchChecker(Generic[T]):
             self.attribute = self.MISMATCH
 
     def check_input(self, txi: TxInput) -> None:
+        from trezor import wire
+
         if self.attribute is self.MISMATCH:
             return  # There was already a mismatch when adding inputs, ignore it now.
 
@@ -87,13 +90,41 @@ class MatchChecker(Generic[T]):
 
 class WalletPathChecker(MatchChecker):
     def attribute_from_tx(self, txio: TxInput | TxOutput) -> Any:
-        if len(txio.address_n) < BIP32_WALLET_DEPTH:
+        if len(txio.address_n) <= BIP32_WALLET_DEPTH:
             return None
         return txio.address_n[:-BIP32_WALLET_DEPTH]
+
+    def get_path(self) -> Bip32Path | None:
+        if isinstance(self.attribute, list):
+            return self.attribute
+        return None
 
 
 class MultisigFingerprintChecker(MatchChecker):
     def attribute_from_tx(self, txio: TxInput | TxOutput) -> Any:
+        from .. import multisig
+
         if not txio.multisig:
-            return None
+            # The fingerprint of a singlesig input or output is defined as an empty byte string.
+            # This has two consequences: First, a singlesig output matches if and only if all
+            # the added inputs are singlesig. Second, a multisig output does not match if any of
+            # the added inputs is singlesig.
+            return bytes()
         return multisig.multisig_fingerprint(txio.multisig)
+
+
+class ScriptTypeChecker(MatchChecker):
+    def attribute_from_tx(self, txio: TxInput | TxOutput) -> Any:
+        if TxOutput.is_type_of(txio):
+            script_type = CHANGE_OUTPUT_TO_INPUT_SCRIPT_TYPES[txio.script_type]
+        else:
+            script_type = txio.script_type
+
+        # SPENDMULTISIG is used only for non-SegWit and is effectively the same as SPENDADDRESS.
+        # For SegWit inputs and outputs multisig is indicated by the presence of the multisig
+        # structure. For both SegWit and non-SegWit we can rely on MultisigFingerprintChecker to
+        # check the multisig structure.
+        if script_type == InputScriptType.SPENDMULTISIG:
+            script_type = InputScriptType.SPENDADDRESS
+
+        return script_type

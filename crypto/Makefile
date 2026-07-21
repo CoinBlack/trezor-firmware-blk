@@ -7,9 +7,6 @@ ifneq ($(CLANG_VERSION),)
 $(if $(shell [ $(CLANG_VERSION_MAJOR) -ge 13 ] && echo "OK"), \
     $(eval CLANG_AT_LEAST_13 := true), \
     $(eval CLANG_AT_LEAST_13 := false))
-$(if $(shell [ $(CLANG_VERSION_MAJOR) -ge 14 ] && echo "OK"), \
-    $(eval CLANG_AT_LEAST_14 := true), \
-    $(eval CLANG_AT_LEAST_14 := false))
 endif
 
 ifeq ($(FUZZER),1)
@@ -62,21 +59,21 @@ CFLAGS   += $(OPTFLAGS) \
             -Wno-missing-braces \
             -Werror
 
+ifneq ($(FUZZER),1) # This can be removed once the fuzzer machine uses at least clang 16
+	CFLAGS += -ftrivial-auto-var-init=zero
+endif
+
 ZKP_CFLAGS = \
 	-DECMULT_GEN_PREC_BITS=4 \
-	-DECMULT_WINDOW_SIZE=8 \
+	-DECMULT_WINDOW_SIZE=2 \
 	-DENABLE_MODULE_GENERATOR \
 	-DENABLE_MODULE_RECOVERY \
 	-DENABLE_MODULE_SCHNORRSIG \
-	-DENABLE_MODULE_EXTRAKEYS
+	-DENABLE_MODULE_EXTRAKEYS \
+	-DENABLE_MODULE_ECDH
 ZKP_PATH = ../vendor/secp256k1-zkp
+# this is specific for 64-bit builds
 CFLAGS += -DSECP256K1_CONTEXT_SIZE=208
-
-# TODO remove this workaround once possible
-ifeq ($(CLANG_AT_LEAST_14),true)
-$(warning "warning: suppressing clang-14 compiler warning for secp256k1-zkp code")
-ZKP_CFLAGS += -Wno-bitwise-instead-of-logical
-endif
 
 VALGRIND ?= 1
 ifeq ($(VALGRIND),1)
@@ -86,11 +83,14 @@ endif
 CFLAGS += -I.
 CFLAGS += -I..
 CFLAGS += -DUSE_ETHEREUM=1
-CFLAGS += -DUSE_GRAPHENE=1
 CFLAGS += -DUSE_KECCAK=1
 CFLAGS += -DUSE_MONERO=1
 CFLAGS += -DUSE_NEM=1
 CFLAGS += -DUSE_CARDANO=1
+CFLAGS += -DUSE_INSECURE_PRNG=1
+CFLAGS += -DAES_128
+CFLAGS += -DAES_192
+CFLAGS += -DAES_VAR
 CFLAGS += $(shell pkg-config --cflags openssl)
 
 # disable certain optimizations and features when small footprint is required
@@ -98,20 +98,21 @@ ifdef SMALL
 CFLAGS += -DUSE_PRECOMPUTED_CP=0
 endif
 
-SRCS   = bignum.c ecdsa.c curves.c secp256k1.c nist256p1.c rand.c hmac.c bip32.c bip39.c bip39_english.c pbkdf2.c base58.c base32.c
+SRCS   = bignum.c ecdsa.c curves.c secp256k1.c nist256p1.c rand.c rand_insecure.c hmac.c bip32.c bip39.c bip39_english.c pbkdf2.c base58.c base32.c
 SRCS  += address.c
 SRCS  += script.c
 SRCS  += ripemd160.c
 SRCS  += sha2.c
 SRCS  += sha3.c
 SRCS  += hasher.c
-SRCS  += aes/aescrypt.c aes/aeskey.c aes/aestab.c aes/aes_modes.c
+SRCS  += aes/aesccm.c aes/aescrypt.c aes/aesgcm.c aes/aeskey.c aes/aestab.c aes/aes_modes.c aes/gf128mul.c
 SRCS  += ed25519-donna/curve25519-donna-32bit.c ed25519-donna/curve25519-donna-helpers.c ed25519-donna/modm-donna-32bit.c
 SRCS  += ed25519-donna/ed25519-donna-basepoint-table.c ed25519-donna/ed25519-donna-32bit-tables.c ed25519-donna/ed25519-donna-impl-base.c
 SRCS  += ed25519-donna/ed25519.c ed25519-donna/curve25519-donna-scalarmult-base.c ed25519-donna/ed25519-sha3.c ed25519-donna/ed25519-keccak.c
 SRCS  += monero/base58.c
 SRCS  += monero/serialize.c
 SRCS  += monero/xmr.c
+SRCS  += noise.c
 SRCS  += blake256.c
 SRCS  += blake2b.c blake2s.c
 SRCS  += chacha_drbg.c
@@ -125,10 +126,15 @@ SRCS  += shamir.c
 SRCS  += hmac_drbg.c
 SRCS  += rfc6979.c
 SRCS  += slip39.c
+SRCS  += slip39_english.c
 SRCS  += zkp_context.c
 SRCS  += zkp_ecdsa.c
 SRCS  += zkp_bip340.c
 SRCS  += cardano.c
+SRCS  += tls_prf.c
+SRCS  += hash_to_curve.c
+SRCS  += buffer.c der.c
+SRCS  += elligator2.c
 
 OBJS   = $(SRCS:.c=.o)
 OBJS  += secp256k1-zkp.o
@@ -160,7 +166,7 @@ tests/test_openssl: tests/test_openssl.o $(OBJS)
 	$(CC) $(CFLAGS) tests/test_openssl.o $(OBJS) $(TESTSSLLIBS) -o tests/test_openssl
 
 tests/libtrezor-crypto.so: $(SRCS) secp256k1-zkp.o precomputed_ecmult.o precomputed_ecmult_gen.o
-	$(CC) $(CFLAGS) -DAES_128 -DAES_192 -fPIC -shared $(SRCS) secp256k1-zkp.o precomputed_ecmult.o precomputed_ecmult_gen.o -o tests/libtrezor-crypto.so
+	$(CC) $(CFLAGS) -fPIC -shared $(SRCS) secp256k1-zkp.o precomputed_ecmult.o precomputed_ecmult_gen.o -o tests/libtrezor-crypto.so
 
 tools: tools/xpubaddrgen tools/mktable tools/bip39bruteforce
 

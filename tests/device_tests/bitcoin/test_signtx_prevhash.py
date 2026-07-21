@@ -4,10 +4,12 @@ from io import BytesIO
 
 import pytest
 
-from trezorlib import btc, messages, tools
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib import btc, messages, models, tools
+from trezorlib.debuglink import DebugSession as Session
 from trezorlib.exceptions import TrezorFailure
 
+from ...common import is_core
+from ...input_flows import InputFlowConfirmAllWarnings
 from .signtx import forge_prevtx
 
 # address at seed "all all all..." path m/44h/0h/0h/0/0
@@ -62,15 +64,12 @@ def hash_tx(data: bytes) -> bytes:
     return sha256(sha256(data).digest()).digest()[::-1]
 
 
-def _check_error_message(value: bytes, model: str, message: str):
-    if model != "1":
-        assert message == "Provided prev_hash is invalid."
-
+def _check_error_message(value: bytes, model: models.TrezorModel, message: str):
     # T1 has several possible errors
-    elif len(value) > 32:
+    if model is models.T1B1 and len(value) > 32:
         assert message.endswith("bytes overflow")
     else:
-        assert message.endswith("Encountered invalid prevhash")
+        assert message.endswith("Provided prev_hash is invalid.")
 
 
 with_bad_prevhashes = pytest.mark.parametrize(
@@ -79,7 +78,7 @@ with_bad_prevhashes = pytest.mark.parametrize(
 
 
 @with_bad_prevhashes
-def test_invalid_prev_hash(client: Client, prev_hash):
+def test_invalid_prev_hash(session: Session, prev_hash):
     inp1 = messages.TxInputType(
         address_n=tools.parse_path("m/44h/0h/0h/0/0"),
         amount=123_456_789,
@@ -94,12 +93,12 @@ def test_invalid_prev_hash(client: Client, prev_hash):
     )
 
     with pytest.raises(TrezorFailure) as e:
-        btc.sign_tx(client, "Testnet", [inp1], [out1], prev_txes={})
-    _check_error_message(prev_hash, client.features.model, e.value.message)
+        btc.sign_tx(session, "Testnet", [inp1], [out1], prev_txes={})
+    _check_error_message(prev_hash, session.model, e.value.message)
 
 
 @with_bad_prevhashes
-def test_invalid_prev_hash_attack(client: Client, prev_hash):
+def test_invalid_prev_hash_attack(session: Session, prev_hash):
     # prepare input with a valid prev-hash
     inp1 = messages.TxInputType(
         address_n=tools.parse_path("m/44h/0h/0h/0/0"),
@@ -131,17 +130,20 @@ def test_invalid_prev_hash_attack(client: Client, prev_hash):
         msg.tx.inputs[0].prev_hash = prev_hash
         return msg
 
-    with client, pytest.raises(TrezorFailure) as e:
+    with session.test_ctx as client, pytest.raises(TrezorFailure) as e:
         client.set_filter(messages.TxAck, attack_filter)
-        btc.sign_tx(client, "Bitcoin", [inp1], [out1], prev_txes=PREV_TXES)
+        if is_core(session):
+            IF = InputFlowConfirmAllWarnings(client)
+            client.set_input_flow(IF.get())
+        btc.sign_tx(session, "Bitcoin", [inp1], [out1], prev_txes=PREV_TXES)
 
     # check that injection was performed
     assert counter == 0
-    _check_error_message(prev_hash, client.features.model, e.value.message)
+    _check_error_message(prev_hash, session.model, e.value.message)
 
 
 @with_bad_prevhashes
-def test_invalid_prev_hash_in_prevtx(client: Client, prev_hash):
+def test_invalid_prev_hash_in_prevtx(session: Session, prev_hash):
     prev_tx = copy(PREV_TX)
 
     # smoke check: replace prev_hash with all zeros, reserialize and hash, try to sign
@@ -159,13 +161,16 @@ def test_invalid_prev_hash_in_prevtx(client: Client, prev_hash):
         amount=99_000_000,
         script_type=messages.OutputScriptType.PAYTOADDRESS,
     )
-    btc.sign_tx(client, "Bitcoin", [inp0], [out1], prev_txes={tx_hash: prev_tx})
+    btc.sign_tx(session, "Bitcoin", [inp0], [out1], prev_txes={tx_hash: prev_tx})
 
     # attack: replace prev_hash with an invalid value
     prev_tx.inputs[0].prev_hash = prev_hash
     tx_hash = hash_tx(serialize_tx(prev_tx))
     inp0.prev_hash = tx_hash
 
-    with pytest.raises(TrezorFailure) as e:
-        btc.sign_tx(client, "Bitcoin", [inp0], [out1], prev_txes={tx_hash: prev_tx})
-    _check_error_message(prev_hash, client.features.model, e.value.message)
+    with session.test_ctx as client, pytest.raises(TrezorFailure) as e:
+        if session.model is not models.T1B1:
+            IF = InputFlowConfirmAllWarnings(session)
+            client.set_input_flow(IF.get())
+        btc.sign_tx(session, "Bitcoin", [inp0], [out1], prev_txes={tx_hash: prev_tx})
+    _check_error_message(prev_hash, session.model, e.value.message)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import click
 from PIL import Image
@@ -11,8 +11,12 @@ from trezorlib import toif
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 
-ICON_SIZE = (64, 64)
-DESTINATION = ROOT / "core" / "src" / "apps" / "webauthn" / "res"
+L_BOLT = "layout_bolt"
+L_DELIZIA = "layout_delizia"
+DESTINATIONS = {
+    ROOT / "core" / "embed" / "rust" / "src" / "ui" / L_BOLT / "res" / "fido": 64,
+    ROOT / "core" / "embed" / "rust" / "src" / "ui" / L_DELIZIA / "res" / "fido": 32,
+}
 EXCLUDE = {"icon_webauthn"}
 
 # insert ../../common/tools to sys.path, so that we can import coin_info
@@ -23,15 +27,21 @@ EXCLUDE = {"icon_webauthn"}
 COMMON_TOOLS_PATH = ROOT / "common" / "tools"
 sys.path.insert(0, str(COMMON_TOOLS_PATH))
 
-import coin_info
+import coin_info  # type: ignore [Import "coin_info" could not be resolved]
 
 
 @click.command()
 @click.option("-c", "--check", is_flag=True, help="Do not write, only check.")
 @click.option("-r", "--remove", is_flag=True, help="Remove unrecognized files.")
-def build_icons(check, remove):
+def build_icons(check: bool, remove: bool) -> None:
     """Build FIDO app icons in the source tree."""
 
+    for path, size in DESTINATIONS.items():
+        build_icons_size(path, size, check, remove)
+
+
+def build_icons_size(destination: Path, size: int, check: bool, remove: bool) -> None:
+    icon_size = (size, size)
     checks_ok = True
     apps = coin_info.fido_info()
 
@@ -45,14 +55,14 @@ def build_icons(check, remove):
                 continue
 
         im = Image.open(app["icon"])
-        resized = im.resize(ICON_SIZE, Image.BOX)
+        resized = im.resize(icon_size, Image.BOX)  # type: ignore ["BOX" is not a known attribute of module "PIL.Image"]
         toi = toif.from_image(resized)
-        dest_path = DESTINATION / f"icon_{app['key']}.toif"
+        dest_path = destination / f"icon_{app['key']}.toif"
 
         total_size += len(toi.to_bytes())
 
         if not check:
-            toi.save(dest_path)
+            toi.save(str(dest_path))
         else:
             if not dest_path.exists():
                 print(f"Missing TOIF: {dest_path}")
@@ -63,11 +73,11 @@ def build_icons(check, remove):
                 print(f"Icon different from source: {dest_path}")
                 checks_ok = False
 
-    print(f"Total icon size: {total_size} bytes")
+    print(f"{destination.parts[-3]} icon size: {total_size} bytes")
 
     keys = EXCLUDE | {"icon_" + app["key"] for app in apps}
     unrecognized_files = False
-    for icon_file in DESTINATION.glob("*.toif"):
+    for icon_file in destination.glob("*.toif"):
         name = icon_file.stem
         if name not in keys:
             unrecognized_files = True

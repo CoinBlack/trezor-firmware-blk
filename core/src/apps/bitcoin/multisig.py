@@ -1,15 +1,23 @@
-from trezor import wire
-from trezor.crypto import bip32
-from trezor.crypto.hashlib import sha256
-from trezor.messages import HDNodeType, MultisigRedeemScriptType
-from trezor.utils import HashWriter
+from typing import TYPE_CHECKING
 
-from apps.common import paths
+from trezor.enums import MultisigPubkeysOrder
+from trezor.wire import DataError
 
-from .writers import write_bytes_fixed, write_uint32
+if TYPE_CHECKING:
+    from buffer_types import AnyBytes
+    from typing import Sequence
+
+    from trezor.messages import HDNodeType, MultisigRedeemScriptType
+
+    from apps.common import paths
 
 
 def multisig_fingerprint(multisig: MultisigRedeemScriptType) -> bytes:
+    from trezor.crypto.hashlib import sha256
+    from trezor.utils import HashWriter
+
+    from .writers import write_bytes_fixed, write_uint32
+
     if multisig.nodes:
         pubnodes = multisig.nodes
     else:
@@ -18,18 +26,20 @@ def multisig_fingerprint(multisig: MultisigRedeemScriptType) -> bytes:
     n = len(pubnodes)
 
     if n < 1 or n > 15 or m < 1 or m > 15:
-        raise wire.DataError("Invalid multisig parameters")
+        raise DataError("Invalid multisig parameters")
 
     for d in pubnodes:
         if len(d.public_key) != 33 or len(d.chain_code) != 32:
-            raise wire.DataError("Invalid multisig parameters")
+            raise DataError("Invalid multisig parameters")
 
-    # casting to bytes(), sorting on bytearray() is not supported in MicroPython
-    pubnodes = sorted(pubnodes, key=lambda n: bytes(n.public_key))
+    if multisig.pubkeys_order == MultisigPubkeysOrder.LEXICOGRAPHIC:
+        # If the order of pubkeys is lexicographic, we don't want the fingerprint to depend on the order of the pubnodes, so we sort the pubnodes before hashing.
+        pubnodes.sort(key=lambda n: n.public_key + n.chain_code)  # type: ignore [Operator "+" not supported]
 
     h = HashWriter(sha256())
     write_uint32(h, m)
     write_uint32(h, n)
+    write_uint32(h, multisig.pubkeys_order)
     for d in pubnodes:
         write_uint32(h, d.depth)
         write_uint32(h, d.fingerprint)
@@ -41,14 +51,25 @@ def multisig_fingerprint(multisig: MultisigRedeemScriptType) -> bytes:
 
 
 def validate_multisig(multisig: MultisigRedeemScriptType) -> None:
+    from apps.common import paths
+
     if any(paths.is_hardened(n) for n in multisig.address_n):
-        raise wire.DataError("Cannot perform hardened derivation from XPUB")
+        raise DataError("Cannot perform hardened derivation from XPUB")
     for hd in multisig.pubkeys:
         if any(paths.is_hardened(n) for n in hd.address_n):
-            raise wire.DataError("Cannot perform hardened derivation from XPUB")
+            raise DataError("Cannot perform hardened derivation from XPUB")
 
 
 def multisig_pubkey_index(multisig: MultisigRedeemScriptType, pubkey: bytes) -> int:
+    validate_multisig(multisig)
+    pubkeys = multisig_get_pubkeys(multisig)
+    try:
+        return pubkeys.index(pubkey)
+    except ValueError:
+        raise DataError("Pubkey not found in multisig script")
+
+
+def multisig_xpub_index(multisig: MultisigRedeemScriptType, pubkey: bytes) -> int:
     validate_multisig(multisig)
     if multisig.nodes:
         for i, hd_node in enumerate(multisig.nodes):
@@ -58,10 +79,12 @@ def multisig_pubkey_index(multisig: MultisigRedeemScriptType, pubkey: bytes) -> 
         for i, hd in enumerate(multisig.pubkeys):
             if multisig_get_pubkey(hd.node, hd.address_n) == pubkey:
                 return i
-    raise wire.DataError("Pubkey not found in multisig script")
+    raise DataError("XPUB not found in multisig script")
 
 
 def multisig_get_pubkey(n: HDNodeType, p: paths.Bip32Path) -> bytes:
+    from trezor.crypto import bip32
+
     node = bip32.HDNode(
         depth=n.depth,
         fingerprint=n.fingerprint,
@@ -74,12 +97,17 @@ def multisig_get_pubkey(n: HDNodeType, p: paths.Bip32Path) -> bytes:
     return node.public_key()
 
 
-def multisig_get_pubkeys(multisig: MultisigRedeemScriptType) -> list[bytes]:
+def multisig_get_pubkeys(multisig: MultisigRedeemScriptType) -> Sequence[AnyBytes]:
     validate_multisig(multisig)
     if multisig.nodes:
-        return [multisig_get_pubkey(hd, multisig.address_n) for hd in multisig.nodes]
+        pubkeys = [multisig_get_pubkey(hd, multisig.address_n) for hd in multisig.nodes]
     else:
-        return [multisig_get_pubkey(hd.node, hd.address_n) for hd in multisig.pubkeys]
+        pubkeys = [
+            multisig_get_pubkey(hd.node, hd.address_n) for hd in multisig.pubkeys
+        ]
+    if multisig.pubkeys_order == MultisigPubkeysOrder.LEXICOGRAPHIC:
+        pubkeys.sort()
+    return pubkeys
 
 
 def multisig_get_pubkey_count(multisig: MultisigRedeemScriptType) -> int:

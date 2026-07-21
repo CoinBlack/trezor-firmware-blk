@@ -1,68 +1,41 @@
 from typing import TYPE_CHECKING
 
-from apps.monero.xmr.serialize.int_serialize import (
-    dump_uint,
-    dump_uvarint,
-    load_uint,
-    load_uvarint,
-)
-
 if TYPE_CHECKING:
-    from typing import Protocol, TypeVar, Union
+    from typing import Protocol, TypeVar
 
     T = TypeVar("T")
 
     XT = TypeVar("XT", bound="XmrType")
     ST = TypeVar("ST", bound="XmrStructuredType")
 
-    XmrFieldType = Union[
-        tuple[str, XT],
-        tuple[str, ST, XT],
-    ]
+    XmrFieldType = tuple[str, XT] | tuple[str, ST, XT]
 
     XmrFspec = tuple[XmrFieldType, ...]
 
     class Writer(Protocol):
-        def write(self, __data: bytes) -> None:
-            ...
+        def write(self, __data: bytes) -> None: ...
 
     class Reader(Protocol):
-        def readinto(self, __buffer: bytearray | memoryview) -> int:
-            ...
+        def readinto(self, __buffer: bytearray | memoryview) -> int: ...
 
     class XmrType(Protocol[T]):
-        def load(self, __reader: Reader) -> T:
-            ...
+        def load(self, __reader: Reader) -> T: ...
 
-        def dump(self, __writer: Writer, __value: T) -> None:
-            ...
+        def dump(self, __writer: Writer, __value: T) -> None: ...
 
     class XmrStructuredType(XmrType):
-        def f_specs(self) -> XmrFspec:
-            ...
+        def f_specs(self) -> XmrFspec: ...
 
 
 class UVarintType:
     @staticmethod
     def load(reader: Reader) -> int:
+        from apps.monero.xmr.serialize.int_serialize import load_uvarint
+
         return load_uvarint(reader)
 
     @staticmethod
     def dump(writer: Writer, n: int) -> None:
+        from apps.monero.xmr.serialize.int_serialize import dump_uvarint
+
         return dump_uvarint(writer, n)
-
-
-class IntType:
-    WIDTH = 0
-
-    @classmethod
-    def load(cls, reader: Reader) -> int:
-        return load_uint(reader, cls.WIDTH)
-
-    @classmethod
-    def dump(cls, writer: Writer, n: int):
-        return dump_uint(writer, n, cls.WIDTH)
-
-
-class UInt8(IntType):
-    WIDTH = 1

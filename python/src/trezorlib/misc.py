@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -17,64 +17,65 @@
 from typing import TYPE_CHECKING, Optional
 
 from . import messages
-from .tools import expect
+from .tools import workflow
 
 if TYPE_CHECKING:
+    from .client import Session
     from .tools import Address
-    from .client import TrezorClient
-    from .protobuf import MessageType
 
 
-@expect(messages.Entropy, field="entropy", ret_type=bytes)
-def get_entropy(client: "TrezorClient", size: int) -> "MessageType":
-    return client.call(messages.GetEntropy(size=size))
+@workflow(capability=messages.Capability.Crypto)
+def get_entropy(session: "Session", size: int) -> bytes:
+    return session.call(messages.GetEntropy(size=size), expect=messages.Entropy).entropy
 
 
-@expect(messages.SignedIdentity)
+@workflow(capability=messages.Capability.Crypto)
 def sign_identity(
-    client: "TrezorClient",
+    session: "Session",
     identity: messages.IdentityType,
     challenge_hidden: bytes,
     challenge_visual: str,
     ecdsa_curve_name: Optional[str] = None,
-) -> "MessageType":
-    return client.call(
+) -> messages.SignedIdentity:
+    return session.call(
         messages.SignIdentity(
             identity=identity,
             challenge_hidden=challenge_hidden,
             challenge_visual=challenge_visual,
             ecdsa_curve_name=ecdsa_curve_name,
-        )
+        ),
+        expect=messages.SignedIdentity,
     )
 
 
-@expect(messages.ECDHSessionKey)
+@workflow(capability=messages.Capability.Crypto)
 def get_ecdh_session_key(
-    client: "TrezorClient",
+    session: "Session",
     identity: messages.IdentityType,
     peer_public_key: bytes,
     ecdsa_curve_name: Optional[str] = None,
-) -> "MessageType":
-    return client.call(
+) -> messages.ECDHSessionKey:
+    return session.call(
         messages.GetECDHSessionKey(
             identity=identity,
             peer_public_key=peer_public_key,
             ecdsa_curve_name=ecdsa_curve_name,
-        )
+        ),
+        expect=messages.ECDHSessionKey,
     )
 
 
-@expect(messages.CipheredKeyValue, field="value", ret_type=bytes)
+@workflow(capability=messages.Capability.Crypto)
 def encrypt_keyvalue(
-    client: "TrezorClient",
+    session: "Session",
     n: "Address",
     key: str,
     value: bytes,
     ask_on_encrypt: bool = True,
     ask_on_decrypt: bool = True,
     iv: bytes = b"",
-) -> "MessageType":
-    return client.call(
+) -> bytes:
+    return session.call(
         messages.CipherKeyValue(
             address_n=n,
             key=key,
@@ -83,21 +84,22 @@ def encrypt_keyvalue(
             ask_on_encrypt=ask_on_encrypt,
             ask_on_decrypt=ask_on_decrypt,
             iv=iv,
-        )
-    )
+        ),
+        expect=messages.CipheredKeyValue,
+    ).value
 
 
-@expect(messages.CipheredKeyValue, field="value", ret_type=bytes)
+@workflow(capability=messages.Capability.Crypto)
 def decrypt_keyvalue(
-    client: "TrezorClient",
+    session: "Session",
     n: "Address",
     key: str,
     value: bytes,
     ask_on_encrypt: bool = True,
     ask_on_decrypt: bool = True,
     iv: bytes = b"",
-) -> "MessageType":
-    return client.call(
+) -> bytes:
+    return session.call(
         messages.CipherKeyValue(
             address_n=n,
             key=key,
@@ -106,10 +108,20 @@ def decrypt_keyvalue(
             ask_on_encrypt=ask_on_encrypt,
             ask_on_decrypt=ask_on_decrypt,
             iv=iv,
-        )
+        ),
+        expect=messages.CipheredKeyValue,
+    ).value
+
+
+@workflow(capability=messages.Capability.Crypto)
+def get_nonce(session: "Session") -> bytes:
+    return session.call(messages.GetNonce(), expect=messages.Nonce).nonce
+
+
+@workflow()
+def payment_notification(
+    session: "Session", payment_req: messages.PaymentRequest
+) -> None:
+    session.call(
+        messages.PaymentNotification(payment_req=payment_req), expect=messages.Success
     )
-
-
-@expect(messages.Nonce, field="nonce", ret_type=bytes)
-def get_nonce(client: "TrezorClient"):
-    return client.call(messages.GetNonce())

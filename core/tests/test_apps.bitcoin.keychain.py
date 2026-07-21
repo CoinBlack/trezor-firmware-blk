@@ -1,22 +1,49 @@
-from common import *
-from storage import cache
+# flake8: noqa: F403,F405
+from common import *  # isort:skip
+
+from storage import cache_common
 from trezor import wire
 from trezor.crypto import bip39
-from apps.common.paths import HARDENED
+from trezor.wire import context
+from trezor.wire.codec.codec_context import CodecContext
 
-from apps.bitcoin.keychain import get_keychain_for_coin
+from apps.bitcoin.keychain import _get_coin_by_name, _get_keychain_for_coin
+
+if utils.USE_THP:
+    import thp_common
+else:
+    from storage import cache_codec
 
 
 class TestBitcoinKeychain(unittest.TestCase):
-    def setUp(self):
-        cache.start_session()
-        seed = bip39.seed(" ".join(["all"] * 12), "")
-        cache.set(cache.APP_COMMON_SEED, seed)
+
+    if utils.USE_THP:
+
+        def setUpClass(self):
+            if __debug__:
+                thp_common.suppress_debug_log()
+            thp_common.prepare_context()
+
+        def setUp(self):
+            seed = bip39.seed(" ".join(["all"] * 12), "")
+            context.cache_set(cache_common.APP_COMMON_SEED, seed)
+
+    else:
+
+        def setUpClass(self):
+            context.CURRENT_CONTEXT = CodecContext(None, bytearray(64))
+
+        def setUp(self):
+            cache_codec.start_session()
+            seed = bip39.seed(" ".join(["all"] * 12), "")
+            cache_codec.get_active_session().set(cache_common.APP_COMMON_SEED, seed)
+
+    def tearDownClass(self):
+        context.CURRENT_CONTEXT = None
 
     def test_bitcoin(self):
-        keychain, coin = await_result(
-            get_keychain_for_coin(wire.DUMMY_CONTEXT, "Bitcoin")
-        )
+        coin = _get_coin_by_name("Bitcoin")
+        keychain = await_result(_get_keychain_for_coin(coin))
         self.assertEqual(coin.coin_name, "Bitcoin")
 
         valid_addresses = (
@@ -46,9 +73,8 @@ class TestBitcoinKeychain(unittest.TestCase):
             self.assertRaises(wire.DataError, keychain.derive, addr)
 
     def test_testnet(self):
-        keychain, coin = await_result(
-            get_keychain_for_coin(wire.DUMMY_CONTEXT, "Testnet")
-        )
+        coin = _get_coin_by_name("Testnet")
+        keychain = await_result(_get_keychain_for_coin(coin))
         self.assertEqual(coin.coin_name, "Testnet")
 
         valid_addresses = (
@@ -78,26 +104,45 @@ class TestBitcoinKeychain(unittest.TestCase):
             self.assertRaises(wire.DataError, keychain.derive, addr)
 
     def test_unspecified(self):
-        keychain, coin = await_result(get_keychain_for_coin(wire.DUMMY_CONTEXT, None))
+        coin = _get_coin_by_name(None)
+        keychain = await_result(_get_keychain_for_coin(coin))
         self.assertEqual(coin.coin_name, "Bitcoin")
         keychain.derive([H_(44), H_(0), H_(0), 0, 0])
 
     def test_unknown(self):
         with self.assertRaises(wire.DataError):
-            await_result(get_keychain_for_coin(wire.DUMMY_CONTEXT, "MadeUpCoin2020"))
+            _get_coin_by_name("MadeUpCoin2020")
 
 
 @unittest.skipUnless(not utils.BITCOIN_ONLY, "altcoin")
 class TestAltcoinKeychains(unittest.TestCase):
-    def setUp(self):
-        cache.start_session()
-        seed = bip39.seed(" ".join(["all"] * 12), "")
-        cache.set(cache.APP_COMMON_SEED, seed)
+    if utils.USE_THP:
+
+        def setUpClass(self):
+            if __debug__:
+                thp_common.suppress_debug_log()
+            thp_common.prepare_context()
+
+        def setUp(self):
+            seed = bip39.seed(" ".join(["all"] * 12), "")
+            context.cache_set(cache_common.APP_COMMON_SEED, seed)
+
+    else:
+
+        def setUpClass(self):
+            context.CURRENT_CONTEXT = CodecContext(None, bytearray(64))
+
+        def setUp(self):
+            cache_codec.start_session()
+            seed = bip39.seed(" ".join(["all"] * 12), "")
+            cache_codec.get_active_session().set(cache_common.APP_COMMON_SEED, seed)
+
+    def tearDownClass(self):
+        context.CURRENT_CONTEXT = None
 
     def test_bcash(self):
-        keychain, coin = await_result(
-            get_keychain_for_coin(wire.DUMMY_CONTEXT, "Bcash")
-        )
+        coin = _get_coin_by_name("Bcash")
+        keychain = await_result(_get_keychain_for_coin(coin))
         self.assertEqual(coin.coin_name, "Bcash")
 
         self.assertFalse(coin.segwit)
@@ -133,9 +178,8 @@ class TestAltcoinKeychains(unittest.TestCase):
             self.assertRaises(wire.DataError, keychain.derive, addr)
 
     def test_litecoin(self):
-        keychain, coin = await_result(
-            get_keychain_for_coin(wire.DUMMY_CONTEXT, "Litecoin")
-        )
+        coin = _get_coin_by_name("Litecoin")
+        keychain = await_result(_get_keychain_for_coin(coin))
         self.assertEqual(coin.coin_name, "Litecoin")
 
         self.assertTrue(coin.segwit)
@@ -152,7 +196,6 @@ class TestAltcoinKeychains(unittest.TestCase):
             [H_(45), 99, 1, 1000],
             [H_(49), H_(0), H_(0), 0, 0],
             [H_(84), H_(0), H_(0), 0, 0],
-
             [44, 2, 0, 0, 0],
             [H_(44), H_(2), H_(0)],
             [H_(44), H_(2), H_(0), 0, 0, 0],

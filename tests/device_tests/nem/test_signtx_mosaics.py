@@ -17,7 +17,7 @@
 import pytest
 
 from trezorlib import nem
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib.debuglink import DebugSession as Session
 from trezorlib.tools import parse_path
 
 from ...common import MNEMONIC12
@@ -27,13 +27,14 @@ ADDRESS_N = parse_path("m/44h/1h/0h/0h/0h")
 pytestmark = [
     pytest.mark.altcoin,
     pytest.mark.nem,
+    pytest.mark.models("t1b1", "t2t1"),
     pytest.mark.setup_client(mnemonic=MNEMONIC12),
 ]
 
 
-def test_nem_signtx_mosaic_supply_change(client: Client):
+def test_nem_signtx_mosaic_supply_change(session: Session):
     tx = nem.sign_tx(
-        client,
+        session,
         ADDRESS_N,
         {
             "timeStamp": 74649215,
@@ -60,9 +61,9 @@ def test_nem_signtx_mosaic_supply_change(client: Client):
     )
 
 
-def test_nem_signtx_mosaic_creation(client: Client):
+def test_nem_signtx_mosaic_creation(session: Session):
     tx = nem.sign_tx(
-        client,
+        session,
         ADDRESS_N,
         {
             "timeStamp": 74649215,
@@ -92,9 +93,9 @@ def test_nem_signtx_mosaic_creation(client: Client):
     )
 
 
-def test_nem_signtx_mosaic_creation_properties(client: Client):
+def test_nem_signtx_mosaic_creation_properties(session: Session):
     tx = nem.sign_tx(
-        client,
+        session,
         ADDRESS_N,
         {
             "timeStamp": 74649215,
@@ -129,9 +130,9 @@ def test_nem_signtx_mosaic_creation_properties(client: Client):
     )
 
 
-def test_nem_signtx_mosaic_creation_levy(client: Client):
+def test_nem_signtx_mosaic_creation_levy(session: Session):
     tx = nem.sign_tx(
-        client,
+        session,
         ADDRESS_N,
         {
             "timeStamp": 74649215,

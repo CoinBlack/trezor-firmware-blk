@@ -2,16 +2,21 @@ from micropython import const
 from typing import TYPE_CHECKING
 
 from trezor import wire
-from trezor.crypto import bech32, bip32, der
-from trezor.crypto.curve import bip340, secp256k1
-from trezor.crypto.hashlib import sha256
+from trezor.crypto import bech32
+from trezor.crypto.curve import bip340
 from trezor.enums import InputScriptType, OutputScriptType
-from trezor.utils import HashWriter, ensure
+from trezor.messages import MultisigRedeemScriptType
+from trezor.utils import ensure
 
 if TYPE_CHECKING:
+    from buffer_types import AnyBytes
     from enum import IntEnum
-    from apps.common.coininfo import CoinInfo
+
+    from trezor.crypto import bip32
     from trezor.messages import TxInput
+    from trezor.utils import HashWriter
+
+    from apps.common.coininfo import CoinInfo
 else:
     IntEnum = object
 
@@ -20,7 +25,11 @@ BITCOIN_NAMES = ("Bitcoin", "Regtest", "Testnet")
 
 
 class SigHashType(IntEnum):
-    """Enumeration type listing the supported signature hash types."""
+    """Enumeration type listing the supported signature hash types.
+
+    Class constants defined below don't need to be used in the code.
+    They are a list of all allowed incoming sighash types.
+    """
 
     # Signature hash type with the same semantics as SIGHASH_ALL, but instead
     # of having to include the byte in the signature, it is implied.
@@ -40,7 +49,8 @@ class SigHashType(IntEnum):
 
     @classmethod
     def from_int(cls, sighash_type: int) -> "SigHashType":
-        for val in cls.__dict__.values():  # type: SigHashType
+        val: SigHashType
+        for val in cls.__dict__.values():
             if val == sighash_type:
                 return val
         raise ValueError("Unsupported sighash type.")
@@ -96,9 +106,12 @@ NONSEGWIT_INPUT_SCRIPT_TYPES = (
 )
 
 
-def ecdsa_sign(node: bip32.HDNode, digest: bytes) -> bytes:
+def ecdsa_sign(node: bip32.HDNode, digest: bytes) -> AnyBytes:
+    from trezor.crypto import der
+    from trezor.crypto.curve import secp256k1
+
     sig = secp256k1.sign(node.private_key(), digest)
-    sigder = der.encode_seq((sig[1:33], sig[33:65]))
+    sigder = der.encode_signature(sig)
     return sigder
 
 
@@ -108,7 +121,11 @@ def bip340_sign(node: bip32.HDNode, digest: bytes) -> bytes:
     return bip340.sign(output_private_key, digest)
 
 
-def ecdsa_hash_pubkey(pubkey: bytes, coin: CoinInfo) -> bytes:
+def ecdsa_hash_pubkey(pubkey: AnyBytes, coin: CoinInfo) -> bytes:
+    ensure(
+        coin.curve_name.startswith("secp256k1")
+    )  # The following code makes sense only for Weiersrass curves
+
     if pubkey[0] == 0x04:
         ensure(len(pubkey) == 65)  # uncompressed format
     elif pubkey[0] == 0x00:
@@ -140,8 +157,12 @@ def decode_bech32_address(prefix: str, address: str) -> tuple[int, bytes]:
 
 
 def input_is_segwit(txi: TxInput) -> bool:
+    # Note that we don't investigate whether external inputs that are not presigned
+    # are SegWit or not. For practical purposes we count them as SegWit, because
+    # they behave as such, i.e. they don't use get_legacy_tx_digest().
     return txi.script_type in SEGWIT_INPUT_SCRIPT_TYPES or (
-        txi.script_type == InputScriptType.EXTERNAL and txi.witness is not None
+        txi.script_type == InputScriptType.EXTERNAL
+        and bool(txi.witness or not txi.script_sig)
     )
 
 
@@ -171,7 +192,88 @@ def input_is_external_unverified(txi: TxInput) -> bool:
 
 
 def tagged_hashwriter(tag: bytes) -> HashWriter:
+    from trezor.crypto.hashlib import sha256
+    from trezor.utils import HashWriter
+
     tag_digest = sha256(tag).digest()
     ctx = sha256(tag_digest)
     ctx.update(tag_digest)
     return HashWriter(ctx)
+
+
+def format_fee_rate(
+    fee_rate: float, coin: CoinInfo, include_shortcut: bool = False
+) -> str:
+    from trezor.strings import format_amount, format_amount_unit
+
+    # Use format_amount to get correct thousands separator -- micropython's built-in
+    # formatting doesn't add thousands sep to floating point numbers.
+    # We multiply by 100 to get a fixed-point integer with two decimal places,
+    # and add 0.5 to round to the nearest integer.
+    fee_rate_formatted = format_amount(int(fee_rate * 100 + 0.5), 2)
+
+    if include_shortcut and coin.coin_shortcut != "BTC":
+        shortcut = " " + coin.coin_shortcut
+    else:
+        shortcut = ""
+
+    return format_amount_unit(
+        fee_rate_formatted, f"sat{shortcut}/{'v' if coin.segwit else ''}B"
+    )
+
+
+# function copied from python/src/trezorlib/tools.py
+def descriptor_checksum(desc: str) -> str:
+    def _polymod(c: int, val: int) -> int:
+        c0 = c >> 35
+        c = ((c & 0x7FFFFFFFF) << 5) ^ val
+        if c0 & 1:
+            c ^= 0xF5DEE51989
+        if c0 & 2:
+            c ^= 0xA9FDCA3312
+        if c0 & 4:
+            c ^= 0x1BAB10E32D
+        if c0 & 8:
+            c ^= 0x3706B1677A
+        if c0 & 16:
+            c ^= 0x644D626FFD
+        return c
+
+    INPUT_CHARSET = "0123456789()[],'/*abcdefgh@:$%{}IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~ijklmnopqrstuvwxyzABCDEFGH`#\"\\ "
+    CHECKSUM_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+    c = 1
+    cls = 0
+    clscount = 0
+    for ch in desc:
+        pos = INPUT_CHARSET.find(ch)
+        if pos == -1:
+            return ""
+        c = _polymod(c, pos & 31)
+        cls = cls * 3 + (pos >> 5)
+        clscount += 1
+        if clscount == 3:
+            c = _polymod(c, cls)
+            cls = 0
+            clscount = 0
+    if clscount > 0:
+        c = _polymod(c, cls)
+    for j in range(0, 8):
+        c = _polymod(c, 0)
+    c ^= 1
+
+    ret = [""] * 8
+    for j in range(0, 8):
+        ret[j] = CHECKSUM_CHARSET[(c >> (5 * (7 - j))) & 31]
+    return "".join(ret)
+
+
+def multisig_uses_single_path(multisig: MultisigRedeemScriptType) -> bool:
+    if not multisig.pubkeys:
+        # Pubkeys are specified by multisig.nodes and multisig.address_n, in this case all the pubkeys use the same path
+        return True
+    else:
+        # Pubkeys are specified by multisig.pubkeys, in this case we check that all the pubkeys use the same path
+        return all(
+            [hd.address_n == multisig.pubkeys[0].address_n for hd in multisig.pubkeys]
+        )

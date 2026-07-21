@@ -5,9 +5,10 @@ package hw.trezor.messages.crypto;
 option java_package = "com.satoshilabs.trezor.lib.protobuf";
 option java_outer_classname = "TrezorMessageCrypto";
 
-option (include_in_bitcoin_only) = true;
+import "messages-common.proto";
+import "options.proto";
 
-import "messages.proto";
+option (include_in_bitcoin_only) = true;
 
 /**
  * Request: Ask device to encrypt or decrypt value of given key
@@ -91,42 +92,10 @@ message ECDHSessionKey {
 }
 
 /**
- * Request: Ask device to commit to CoSi signing
+ * Request: Ask the device to verify and display a payment notification.
  * @start
- * @next CosiCommitment
- * @next Failure
+ * @next Success
  */
-message CosiCommit {
-    repeated uint32 address_n = 1;              // BIP-32 path to derive the key from master node
-    optional bytes data = 2 [deprecated=true];  // Data to be signed. Deprecated in 1.10.2, the field is not needed, since CoSi commitments are no longer deterministic.
-}
-
-/**
- * Response: Contains a CoSi commitment
- * @end
- */
-message CosiCommitment {
-    optional bytes commitment = 1;  // Commitment
-    optional bytes pubkey = 2;      // Public key
-}
-
-/**
- * Request: Ask device to sign using CoSi
- * @start
- * @next CosiSignature
- * @next Failure
- */
-message CosiSign {
-    repeated uint32 address_n = 1;          // BIP-32 path to derive the key from master node
-    optional bytes data = 2;                // Data to be signed
-    optional bytes global_commitment = 3;   // Aggregated commitment
-    optional bytes global_pubkey = 4;       // Aggregated public key
-}
-
-/**
- * Response: Contains a CoSi signature
- * @end
- */
-message CosiSignature {
-    required bytes signature = 1;   // Signature
+message PaymentNotification {
+    optional common.PaymentRequest payment_req = 1;  // SLIP-24 payment request
 }

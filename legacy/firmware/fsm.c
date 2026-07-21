@@ -48,6 +48,7 @@
 #include "secp256k1.h"
 #include "signing.h"
 #include "supervise.h"
+#include "timer.h"
 #include "transaction.h"
 #include "trezor.h"
 #include "usb.h"
@@ -55,6 +56,8 @@
 
 #if !BITCOIN_ONLY
 #include "ethereum.h"
+#include "ethereum_definitions.h"
+#include "ethereum_networks.h"
 #include "nem.h"
 #include "nem2.h"
 #include "stellar.h"
@@ -67,6 +70,11 @@
 // message methods
 
 static uint8_t msg_resp[MSG_OUT_DECODED_SIZE] __attribute__((aligned));
+
+// Authorization message type triggered by DoPreauthorized.
+static MessageType authorization_type = 0;
+
+static uint32_t unlock_path = 0;
 
 #define RESP_INIT(TYPE)                                                    \
   TYPE *resp = (TYPE *)(void *)msg_resp;                                   \
@@ -98,10 +106,11 @@ static uint8_t msg_resp[MSG_OUT_DECODED_SIZE] __attribute__((aligned));
     return;                 \
   }
 
-#define CHECK_UNLOCKED         \
-  if (!session_isUnlocked()) { \
-    layoutHome();              \
-    return;                    \
+#define CHECK_UNLOCKED                                              \
+  if (!session_isUnlocked()) {                                      \
+    fsm_sendFailure(FailureType_Failure_ProcessError, _("Locked")); \
+    layoutHome();                                                   \
+    return;                                                         \
   }
 
 #define CHECK_PARAM(cond, errormsg)                             \
@@ -182,6 +191,18 @@ void fsm_sendFailure(FailureType code, const char *text)
       case FailureType_Failure_InvalidSession:
         text = _("Invalid session");
         break;
+      case FailureType_Failure_Busy:
+        text = _("Device is busy");
+        break;
+      case FailureType_Failure_ThpUnallocatedSession:
+        text = _("Unallocated session");
+        break;
+      case FailureType_Failure_InvalidProtocol:
+        text = _("Invalid protocol");
+        break;
+      case FailureType_Failure_InProgress:
+        text = _("Operation in progress");
+        break;
       case FailureType_Failure_FirmwareError:
         text = _("Firmware error");
         break;
@@ -217,20 +238,33 @@ static const CoinInfo *fsm_getCoin(bool has_name, const char *name) {
   return coin;
 }
 
-static HDNode *fsm_getDerivedNode(const char *curve, const uint32_t *address_n,
-                                  size_t address_n_count,
-                                  uint32_t *fingerprint) {
+static HDNode *fsm_getDerivedNodeEx(const char *curve,
+                                    const uint32_t *address_n,
+                                    size_t address_n_count, const uint8_t *seed,
+                                    uint32_t *fingerprint) {
   static CONFIDENTIAL HDNode node;
   if (fingerprint) {
     *fingerprint = 0;
   }
-  if (!config_getRootNode(&node, curve)) {
-    layoutHome();
-    return 0;
+
+  if (seed == NULL) {
+    if (!config_getRootNode(&node, curve)) {
+      layoutHome();
+      return 0;
+    }
+  } else {
+    if (hdnode_from_seed(seed, 64, curve, &node) != 1) {
+      fsm_sendFailure(FailureType_Failure_NotInitialized,
+                      _("Unsupported curve"));
+      layoutHome();
+      return 0;
+    }
   }
+
   if (!address_n || address_n_count == 0) {
     return &node;
   }
+
   if (hdnode_private_ckd_cached(&node, address_n, address_n_count,
                                 fingerprint) == 0) {
     fsm_sendFailure(FailureType_Failure_ProcessError,
@@ -239,6 +273,31 @@ static HDNode *fsm_getDerivedNode(const char *curve, const uint32_t *address_n,
     return 0;
   }
   return &node;
+}
+
+static HDNode *fsm_getDerivedNode(const char *curve, const uint32_t *address_n,
+                                  size_t address_n_count,
+                                  uint32_t *fingerprint) {
+  return fsm_getDerivedNodeEx(curve, address_n, address_n_count, NULL,
+                              fingerprint);
+}
+
+static bool fsm_getSlip21Key(const char *path[], size_t path_count,
+                             uint8_t key[32]) {
+  const uint8_t *seed = config_getSeed();
+  if (seed == NULL) {
+    return false;
+  }
+
+  static CONFIDENTIAL Slip21Node node;
+  slip21_from_seed(seed, 64, &node);
+  for (size_t i = 0; i < path_count; ++i) {
+    slip21_derive_path(&node, (uint8_t *)path[i], strlen(path[i]));
+  }
+  memcpy(key, slip21_key(&node), 32);
+  memzero(&node, sizeof(node));
+
+  return true;
 }
 
 static bool fsm_layoutAddress(const char *address, const char *desc,
@@ -272,7 +331,7 @@ static bool fsm_layoutAddress(const char *address, const char *desc,
       default: {  // show XPUBs
         int index = (screen - 2) / 2;
         int page = (screen - 2) % 2;
-        char xpub[XPUB_MAXLEN] = {0};
+        char xpub[XPUB_MAXLEN + 1] = {0};
         const HDNodeType *node_ptr = NULL;
         if (multisig->nodes_count) {  // use multisig->nodes
           node_ptr = &(multisig->nodes[index]);
@@ -353,6 +412,14 @@ bool fsm_layoutVerifyMessage(const uint8_t *msg, uint32_t len) {
   }
 }
 
+bool fsm_layoutCommitmentData(const uint8_t *msg, uint32_t len) {
+  if (is_valid_ascii(msg, len)) {
+    return fsm_layoutPaginated(_("Commitment data"), msg, len, true);
+  } else {
+    return fsm_layoutPaginated(_("Binary commitment data"), msg, len, false);
+  }
+}
+
 void fsm_msgRebootToBootloader(void) {
   layoutDialogSwipe(&bmp_icon_question, _("Cancel"), _("Confirm"), NULL,
                     _("Do you want to"), _("restart device in"),
@@ -375,12 +442,25 @@ void fsm_msgRebootToBootloader(void) {
 }
 
 void fsm_abortWorkflows(void) {
+  reset_abort();
   recovery_abort();
   signing_abort();
+  authorization_type = 0;
+  unlock_path = 0;
 #if !BITCOIN_ONLY
   ethereum_signing_abort();
   stellar_signingAbort();
 #endif
+}
+
+void fsm_postMsgCleanup(MessageType message_type) {
+  if (message_type != MessageType_MessageType_DoPreauthorized) {
+    authorization_type = 0;
+  }
+
+  if (message_type != MessageType_MessageType_UnlockPath) {
+    unlock_path = 0;
+  }
 }
 
 bool fsm_layoutPathWarning(void) {
@@ -389,6 +469,17 @@ bool fsm_layoutPathWarning(void) {
                     _("Continue at your"), _("own risk!"), NULL);
   if (!protectButton(ButtonRequestType_ButtonRequest_UnknownDerivationPath,
                      false)) {
+    fsm_sendFailure(FailureType_Failure_ActionCancelled, NULL);
+    return false;
+  }
+  return true;
+}
+
+bool fsm_layoutDifferentPathsWarning(void) {
+  layoutDialogSwipe(&bmp_icon_warning, _("Abort"), _("Continue"), NULL,
+                    _("Using different paths"), _("for different XPUBs."), NULL,
+                    _("Continue at your"), _("own risk!"), NULL);
+  if (!protectButton(ButtonRequestType_ButtonRequest_Warning, false)) {
     fsm_sendFailure(FailureType_Failure_ActionCancelled, NULL);
     return false;
   }

@@ -1,77 +1,59 @@
-use crate::ui::component::{
-    text::layout::{LayoutFit, TextNoOp},
-    FormattedText,
-};
+use crate::ui::util::Pager;
 
 /// Common message type for pagination components.
-pub enum PageMsg<T, U> {
+#[cfg_attr(feature = "debug", derive(ufmt::derive::uDebug))]
+pub enum PageMsg<T> {
     /// Pass-through from paged component.
     Content(T),
 
-    /// Messages from page controls outside the paged component, like
-    /// "OK" and "Cancel" buttons.
-    Controls(U),
+    /// Confirmed using page controls.
+    Confirmed,
+
+    /// Cancelled using page controls.
+    Cancelled,
+
+    /// Info button pressed
+    Info,
+
+    /// Page component was configured to react to swipes and user swiped left.
+    SwipeLeft,
+
+    /// Page component was configured to react to swipes and user swiped right.
+    SwipeRight,
 }
 
+/// Paginate trait allowing the user to see the internal pager state.
 pub trait Paginate {
-    fn page_count(&mut self) -> usize;
-    fn change_page(&mut self, active_page: usize);
-}
+    /// What is the internal pager state?
+    fn pager(&self) -> Pager;
+    /// Navigate to the given page.
+    fn change_page(&mut self, active_page: u16);
 
-impl<F, T> Paginate for FormattedText<F, T>
-where
-    F: AsRef<str>,
-    T: AsRef<str>,
-{
-    fn page_count(&mut self) -> usize {
-        let mut page_count = 1; // There's always at least one page.
-        let mut char_offset = 0;
-
-        loop {
-            let fit = self.layout_content(&mut TextNoOp);
-            match fit {
-                LayoutFit::Fitting { .. } => {
-                    break; // TODO: We should consider if there's more content
-                           // to render.
-                }
-                LayoutFit::OutOfBounds {
-                    processed_chars, ..
-                } => {
-                    page_count += 1;
-                    char_offset += processed_chars;
-                    self.set_char_offset(char_offset);
-                }
-            }
+    fn next_page(&mut self) {
+        let mut pager = self.pager();
+        if pager.goto_next() {
+            self.change_page(pager.current());
         }
-
-        // Reset the char offset back to the beginning.
-        self.set_char_offset(0);
-
-        page_count
     }
 
-    fn change_page(&mut self, to_page: usize) {
-        let mut active_page = 0;
-        let mut char_offset = 0;
+    fn prev_page(&mut self) {
+        let mut pager = self.pager();
+        if pager.goto_prev() {
+            self.change_page(pager.current());
+        }
+    }
+}
 
-        // Make sure we're starting from the beginning.
-        self.set_char_offset(char_offset);
+pub trait SinglePage {}
 
-        while active_page < to_page {
-            let fit = self.layout_content(&mut TextNoOp);
-            match fit {
-                LayoutFit::Fitting { .. } => {
-                    break; // TODO: We should consider if there's more content
-                           // to render.
-                }
-                LayoutFit::OutOfBounds {
-                    processed_chars, ..
-                } => {
-                    active_page += 1;
-                    char_offset += processed_chars;
-                    self.set_char_offset(char_offset);
-                }
-            }
+impl<T: SinglePage> Paginate for T {
+    fn pager(&self) -> Pager {
+        Pager::single_page()
+    }
+
+    fn change_page(&mut self, active_page: u16) {
+        if active_page != 0 {
+            unimplemented!()
         }
     }
 }

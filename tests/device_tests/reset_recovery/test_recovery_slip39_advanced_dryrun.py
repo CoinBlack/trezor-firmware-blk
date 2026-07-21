@@ -17,12 +17,13 @@
 import pytest
 
 from trezorlib import device, messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib.debuglink import DebugSession as Session
 from trezorlib.exceptions import TrezorFailure
 
-from ...common import MNEMONIC_SLIP39_ADVANCED_20, recovery_enter_shares
+from ...common import MNEMONIC_SLIP39_ADVANCED_20
+from ...input_flows import InputFlowSlip39AdvancedRecoveryDryRun
 
-pytestmark = pytest.mark.skip_t1
+pytestmark = pytest.mark.models("core")
 
 INVALID_SHARES_SLIP39_ADVANCED_20 = [
     "chest garlic acrobat leaf diploma thank soul predator grant laundry camera license language likely slim twice amount rich total carve",
@@ -38,56 +39,38 @@ EXTRA_GROUP_SHARE = [
 
 
 @pytest.mark.setup_client(mnemonic=MNEMONIC_SLIP39_ADVANCED_20, passphrase=False)
-def test_2of3_dryrun(client: Client):
-    debug = client.debug
-
-    def input_flow():
-        yield  # Confirm Dryrun
-        debug.press_yes()
-        # run recovery flow
-        yield from recovery_enter_shares(
-            debug, EXTRA_GROUP_SHARE + MNEMONIC_SLIP39_ADVANCED_20, groups=True
+def test_2of3_dryrun(session: Session):
+    with session.test_ctx as client:
+        IF = InputFlowSlip39AdvancedRecoveryDryRun(
+            session, EXTRA_GROUP_SHARE + MNEMONIC_SLIP39_ADVANCED_20
         )
-
-    with client:
-        client.set_input_flow(input_flow)
-        ret = device.recover(
-            client,
+        client.set_input_flow(IF.get())
+        device.recover(
+            session,
             passphrase_protection=False,
             pin_protection=False,
             label="label",
-            language="en-US",
-            dry_run=True,
+            type=messages.RecoveryType.DryRun,
         )
-
-    # Dry run was successful
-    assert ret == messages.Success(
-        message="The seed is valid and matches the one in the device"
-    )
 
 
 @pytest.mark.setup_client(mnemonic=MNEMONIC_SLIP39_ADVANCED_20)
-def test_2of3_invalid_seed_dryrun(client: Client):
-    debug = client.debug
-
-    def input_flow():
-        yield  # Confirm Dryrun
-        debug.press_yes()
-        # run recovery flow
-        yield from recovery_enter_shares(
-            debug, INVALID_SHARES_SLIP39_ADVANCED_20, groups=True
-        )
-
+def test_2of3_invalid_seed_dryrun(session: Session):
     # test fails because of different seed on device
-    with client, pytest.raises(
-        TrezorFailure, match=r"The seed does not match the one in the device"
+    with (
+        session.test_ctx as client,
+        pytest.raises(
+            TrezorFailure, match=r"The seed does not match the one in the device"
+        ),
     ):
-        client.set_input_flow(input_flow)
+        IF = InputFlowSlip39AdvancedRecoveryDryRun(
+            session, INVALID_SHARES_SLIP39_ADVANCED_20, mismatch=True
+        )
+        client.set_input_flow(IF.get())
         device.recover(
-            client,
+            session,
             passphrase_protection=False,
             pin_protection=False,
             label="label",
-            language="en-US",
-            dry_run=True,
+            type=messages.RecoveryType.DryRun,
         )

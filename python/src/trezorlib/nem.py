@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -18,12 +18,11 @@ import json
 from typing import TYPE_CHECKING
 
 from . import exceptions, messages
-from .tools import expect
+from .tools import workflow
 
 if TYPE_CHECKING:
-    from .client import TrezorClient
+    from .client import Session
     from .tools import Address
-    from .protobuf import MessageType
 
 TYPE_TRANSACTION_TRANSFER = 0x0101
 TYPE_IMPORTANCE_TRANSFER = 0x0801
@@ -174,10 +173,11 @@ def fill_transaction_by_type(msg: messages.NEMSignTx, transaction: dict) -> None
         raise ValueError("Unknown transaction type")
 
 
-def create_sign_tx(transaction: dict) -> messages.NEMSignTx:
+def create_sign_tx(transaction: dict, chunkify: bool = False) -> messages.NEMSignTx:
     msg = messages.NEMSignTx(
         transaction=create_transaction_common(transaction),
         cosigning=transaction["type"] == TYPE_MULTISIG_SIGNATURE,
+        chunkify=chunkify,
     )
 
     if transaction["type"] in (TYPE_MULTISIG_SIGNATURE, TYPE_MULTISIG):
@@ -195,22 +195,31 @@ def create_sign_tx(transaction: dict) -> messages.NEMSignTx:
 # ====== Client functions ====== #
 
 
-@expect(messages.NEMAddress, field="address", ret_type=str)
+@workflow(capability=messages.Capability.NEM)
 def get_address(
-    client: "TrezorClient", n: "Address", network: int, show_display: bool = False
-) -> "MessageType":
-    return client.call(
-        messages.NEMGetAddress(address_n=n, network=network, show_display=show_display)
-    )
+    session: "Session",
+    n: "Address",
+    network: int,
+    show_display: bool = False,
+    chunkify: bool = False,
+) -> str:
+    return session.call(
+        messages.NEMGetAddress(
+            address_n=n, network=network, show_display=show_display, chunkify=chunkify
+        ),
+        expect=messages.NEMAddress,
+    ).address
 
 
-@expect(messages.NEMSignedTx)
-def sign_tx(client: "TrezorClient", n: "Address", transaction: dict) -> "MessageType":
+@workflow(capability=messages.Capability.NEM)
+def sign_tx(
+    session: "Session", n: "Address", transaction: dict, chunkify: bool = False
+) -> messages.NEMSignedTx:
     try:
-        msg = create_sign_tx(transaction)
+        msg = create_sign_tx(transaction, chunkify=chunkify)
     except ValueError as e:
         raise exceptions.TrezorException("Failed to encode transaction") from e
 
     assert msg.transaction is not None
     msg.transaction.address_n = n
-    return client.call(msg)
+    return session.call(msg, expect=messages.NEMSignedTx)

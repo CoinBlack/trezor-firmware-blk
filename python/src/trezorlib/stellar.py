@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -15,14 +15,13 @@
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
 from decimal import Decimal
-from typing import TYPE_CHECKING, List, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Tuple, Union
 
 from . import exceptions, messages
-from .tools import expect
+from .tools import workflow
 
 if TYPE_CHECKING:
-    from .protobuf import MessageType
-    from .client import TrezorClient
+    from .client import Session
     from .tools import Address
 
     StellarMessageType = Union[
@@ -39,6 +38,7 @@ if TYPE_CHECKING:
         messages.StellarPathPaymentStrictSendOp,
         messages.StellarPaymentOp,
         messages.StellarSetOptionsOp,
+        messages.StellarClaimClaimableBalanceOp,
     ]
 
 try:
@@ -48,28 +48,29 @@ try:
         Asset,
         BumpSequence,
         ChangeTrust,
+        ClaimClaimableBalance,
         CreateAccount,
         CreatePassiveSellOffer,
         HashMemo,
         IdMemo,
+        LiquidityPoolAsset,
+        ManageBuyOffer,
         ManageData,
         ManageSellOffer,
+        MuxedAccount,
+        Network,
         NoneMemo,
         Operation,
         PathPaymentStrictReceive,
         PathPaymentStrictSend,
         Payment,
+        Price,
         ReturnHashMemo,
         SetOptions,
         TextMemo,
         TransactionEnvelope,
         TrustLineEntryFlag,
-        Price,
-        Network,
-        ManageBuyOffer,
-        MuxedAccount,
     )
-    from stellar_sdk.xdr.signer_key_type import SignerKeyType
 
     HAVE_STELLAR_SDK = True
     DEFAULT_NETWORK_PASSPHRASE = Network.PUBLIC_NETWORK_PASSPHRASE
@@ -92,7 +93,7 @@ def from_envelope(
         raise RuntimeError("Stellar SDK not available")
 
     parsed_tx = envelope.transaction
-    if parsed_tx.time_bounds is None:
+    if parsed_tx.preconditions is None or parsed_tx.preconditions.time_bounds is None:
         raise ValueError("Timebounds are mandatory")
 
     memo_type = messages.StellarMemoType.NONE
@@ -122,8 +123,8 @@ def from_envelope(
         source_account=parsed_tx.source.account_id,
         fee=parsed_tx.fee,
         sequence_number=parsed_tx.sequence,
-        timebounds_start=parsed_tx.time_bounds.min_time,
-        timebounds_end=parsed_tx.time_bounds.max_time,
+        timebounds_start=parsed_tx.preconditions.time_bounds.min_time,
+        timebounds_end=parsed_tx.preconditions.time_bounds.max_time,
         memo_type=memo_type,
         memo_text=memo_text,
         memo_id=memo_id,
@@ -202,20 +203,14 @@ def _read_operation(op: "Operation") -> "StellarMessageType":
             home_domain=op.home_domain,
         )
         if op.signer:
-            signer_type = op.signer.signer_key.signer_key.type
-            if signer_type == SignerKeyType.SIGNER_KEY_TYPE_ED25519:
-                signer_key = op.signer.signer_key.signer_key.ed25519.uint256
-            elif signer_type == SignerKeyType.SIGNER_KEY_TYPE_HASH_X:
-                signer_key = op.signer.signer_key.signer_key.hash_x.uint256
-            elif signer_type == SignerKeyType.SIGNER_KEY_TYPE_PRE_AUTH_TX:
-                signer_key = op.signer.signer_key.signer_key.pre_auth_tx.uint256
-            else:
-                raise ValueError("Unsupported signer key type")
+            signer_type = op.signer.signer_key.signer_key_type
             operation.signer_type = messages.StellarSignerType(signer_type.value)
-            operation.signer_key = signer_key
+            operation.signer_key = op.signer.signer_key.signer_key
             operation.signer_weight = op.signer.weight
         return operation
     if isinstance(op, ChangeTrust):
+        if isinstance(op.asset, LiquidityPoolAsset):
+            raise ValueError("Liquidity pool assets are not supported")
         return messages.StellarChangeTrustOp(
             source_account=source_account,
             asset=_read_asset(op.asset),
@@ -278,10 +273,15 @@ def _read_operation(op: "Operation") -> "StellarMessageType":
             destination_min=_read_amount(op.dest_min),
             paths=[_read_asset(asset) for asset in op.path],
         )
+    if isinstance(op, ClaimClaimableBalance):
+        return messages.StellarClaimClaimableBalanceOp(
+            source_account=source_account,
+            balance_id=bytes.fromhex(op.balance_id),
+        )
     raise ValueError(f"Unknown operation type: {op.__class__.__name__}")
 
 
-def _raise_if_account_muxed_id_exists(account: "MuxedAccount"):
+def _raise_if_account_muxed_id_exists(account: "MuxedAccount") -> None:
     # Currently Trezor firmware does not support MuxedAccount,
     # so we throw an exception here.
     if account.account_muxed_id is not None:
@@ -322,17 +322,28 @@ def _read_asset(asset: "Asset") -> messages.StellarAsset:
 # ====== Client functions ====== #
 
 
-@expect(messages.StellarAddress, field="address", ret_type=str)
-def get_address(
-    client: "TrezorClient", address_n: "Address", show_display: bool = False
-) -> "MessageType":
-    return client.call(
-        messages.StellarGetAddress(address_n=address_n, show_display=show_display)
+def get_address(*args: Any, **kwargs: Any) -> str:
+    return get_authenticated_address(*args, **kwargs).address
+
+
+@workflow(capability=messages.Capability.Stellar)
+def get_authenticated_address(
+    session: "Session",
+    address_n: "Address",
+    show_display: bool = False,
+    chunkify: bool = False,
+) -> messages.StellarAddress:
+    return session.call(
+        messages.StellarGetAddress(
+            address_n=address_n, show_display=show_display, chunkify=chunkify
+        ),
+        expect=messages.StellarAddress,
     )
 
 
+@workflow(capability=messages.Capability.Stellar)
 def sign_tx(
-    client: "TrezorClient",
+    session: "Session",
     tx: messages.StellarSignTx,
     operations: List["StellarMessageType"],
     address_n: "Address",
@@ -348,20 +359,17 @@ def sign_tx(
     # 3. Receive a StellarTxOpRequest message
     # 4. Send operations one by one until all operations have been sent. If there are more operations to sign, the device will send a StellarTxOpRequest message
     # 5. The final message received will be StellarSignedTx which is returned from this method
-    resp = client.call(tx)
+    resp = session.call(tx)
     try:
         while isinstance(resp, messages.StellarTxOpRequest):
-            resp = client.call(operations.pop(0))
+            resp = session.call(operations.pop(0))
     except IndexError:
         # pop from empty list
         raise exceptions.TrezorException(
             "Reached end of operations without a signature."
         ) from None
 
-    if not isinstance(resp, messages.StellarSignedTx):
-        raise exceptions.TrezorException(
-            f"Unexpected message: {resp.__class__.__name__}"
-        )
+    resp = messages.StellarSignedTx.ensure_isinstance(resp)
 
     if operations:
         raise exceptions.TrezorException(

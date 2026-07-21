@@ -1,20 +1,15 @@
 from typing import TYPE_CHECKING
 
-from trezor import wire
 from trezor.crypto import hashlib
 
-from apps.common.seed import remove_ed25519_prefix
-
-from . import (
-    ADDRESS_KEY_HASH_SIZE,
-    SCRIPT_HASH_SIZE,
-    bech32,
-    network_ids,
-    protocol_magics,
-)
-from .paths import ACCOUNT_PATH_INDEX, SCHEMA_STAKING_ANY_ACCOUNT, unharden
+from . import ADDRESS_KEY_HASH_SIZE, bech32
+from .paths import ACCOUNT_PATH_INDEX
 
 if TYPE_CHECKING:
+    from buffer_types import AnyBytes
+
+    from trezor.wire import ProcessError
+
     from .. import seed
 
 
@@ -40,6 +35,8 @@ def to_account_path(path: list[int]) -> list[int]:
 
 
 def format_account_number(path: list[int]) -> str:
+    from .paths import unharden
+
     if len(path) <= ACCOUNT_PATH_INDEX:
         raise ValueError("Path is too short.")
 
@@ -53,11 +50,11 @@ def format_optional_int(number: int | None) -> str:
     return str(number)
 
 
-def format_stake_pool_id(pool_id_bytes: bytes) -> str:
+def format_stake_pool_id(pool_id_bytes: AnyBytes) -> str:
     return bech32.encode("pool", pool_id_bytes)
 
 
-def format_asset_fingerprint(policy_id: bytes, asset_name_bytes: bytes) -> str:
+def format_asset_fingerprint(policy_id: AnyBytes, asset_name_bytes: AnyBytes) -> str:
     fingerprint = hashlib.blake2b(
         # bytearrays are being promoted to bytes: https://github.com/python/mypy/issues/654
         # but bytearrays are not concatenable, this casting works around this limitation
@@ -76,6 +73,8 @@ def get_public_key_hash(keychain: seed.Keychain, path: list[int]) -> bytes:
 def derive_public_key(
     keychain: seed.Keychain, path: list[int], extended: bool = False
 ) -> bytes:
+    from apps.common.seed import remove_ed25519_prefix
+
     node = keychain.derive(path)
     public_key = remove_ed25519_prefix(node.public_key())
     return public_key if not extended else public_key + node.chain_code()
@@ -83,10 +82,13 @@ def derive_public_key(
 
 def validate_stake_credential(
     path: list[int],
-    script_hash: bytes | None,
-    key_hash: bytes | None,
-    error: wire.ProcessError,
+    script_hash: AnyBytes | None,
+    key_hash: AnyBytes | None,
+    error: ProcessError,
 ) -> None:
+    from . import SCRIPT_HASH_SIZE
+    from .paths import SCHEMA_STAKING_ANY_ACCOUNT
+
     if sum(bool(k) for k in (path, script_hash, key_hash)) != 1:
         raise error
 
@@ -104,8 +106,48 @@ def validate_network_info(network_id: int, protocol_magic: int) -> None:
     belong to the mainnet or that both belong to a testnet. We don't need to check for
     consistency between various testnets (at least for now).
     """
+    from trezor import wire
+
+    from . import network_ids, protocol_magics
+
     is_mainnet_network_id = network_ids.is_mainnet(network_id)
     is_mainnet_protocol_magic = protocol_magics.is_mainnet(protocol_magic)
 
     if is_mainnet_network_id != is_mainnet_protocol_magic:
         raise wire.ProcessError("Invalid network id/protocol magic combination!")
+
+
+def is_printable_ascii(bytestring: AnyBytes) -> bool:
+    """Includes space character."""
+    return all(32 <= b <= 126 for b in bytestring)
+
+
+def is_unambiguous_ascii(bytestring: AnyBytes) -> bool:
+    """
+    Checks whether the bytestring can be printed as ASCII without confusion.
+    Based on https://github.com/vacuumlabs/ledger-app-cardano-shelley/blob/6ddc60e8fdff13e35bff5cdf108b84b81a79f10c/src/textUtils.c#L274
+    """
+    # no empty strings
+    if len(bytestring) == 0:
+        return False
+
+    # no non-printable ascii except spaces
+    if not is_printable_ascii(bytestring):
+        return False
+
+    SPACE = ord(" ")
+
+    # no leading space
+    if bytestring[0] == SPACE:
+        return False
+
+    # no trailing space
+    if bytestring[-1] == SPACE:
+        return False
+
+    # no consecutive spaces
+    for a, b in zip(bytestring, bytestring[1:]):
+        if a == SPACE and b == SPACE:
+            return False
+
+    return True

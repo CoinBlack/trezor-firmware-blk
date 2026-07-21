@@ -1,6 +1,17 @@
-from common import *
+# flake8: noqa: F403,F405
+from common import *  # isort:skip
+
 from trezor.utils import ensure
+
 from apps.common.paths import *
+
+
+# NOTE: moved into tests not to occupy flash space
+# in firmware binary, when it is not used in production
+class NeverMatchingSchema:
+    @staticmethod
+    def match(path: "Bip32Path") -> bool:
+        return False
 
 
 class TestPaths(unittest.TestCase):
@@ -44,7 +55,7 @@ class TestPathSchemas(unittest.TestCase):
         ensure(
             all(is_equal(a, b) for a, b in zip(schema_a.schema, schema_b.schema))
             and is_equal(schema_a.trailing_components, schema_b.trailing_components),
-            f"Schemas differ:\nA = {repr(schema_a)}\nB = {repr(schema_b)}"
+            f"Schemas differ:\nA = {repr(schema_a)}\nB = {repr(schema_b)}",
         )
 
     def test_always_never_matching(self):
@@ -173,6 +184,31 @@ class TestPathSchemas(unittest.TestCase):
             trailing_components=Interval(0, 0xFFFF_FFFF),
         )
         self.assertEqualSchema(schema_manual, schema_parsed)
+
+    def test_restrict(self):
+        PATTERN_BIP44 = "m/44'/coin_type'/account'/change/address_index"
+
+        # Restrict coin type to Bitcoin.
+        schema = PathSchema.parse(PATTERN_BIP44, (0, 145))
+        self.assertTrue(schema.restrict([H_(44), H_(0)]))
+        expected = PathSchema.parse(PATTERN_BIP44, 0)
+        self.assertEqualSchema(schema, expected)
+
+        # Restrict coin type to Bitcoin Cash and account 2.
+        schema = PathSchema.parse(PATTERN_BIP44, (0, 145))
+        self.assertTrue(schema.restrict([H_(44), H_(145), H_(2)]))
+        expected = PathSchema.parse("m/44'/145'/2'/change/address_index", 0)
+        self.assertEqualSchema(schema, expected)
+
+        # Restrict wildcards.
+        schema = PathSchema.parse("m/10018'/**", 0)
+        self.assertTrue(schema.restrict([H_(10018), H_(3), 7]))
+        expected = PathSchema.parse("m/10018'/3'/7/**", 0)
+        self.assertEqualSchema(schema, expected)
+
+        # Restrict to a never-matching schema.
+        schema = PathSchema.parse(PATTERN_BIP44, (0, 145))
+        self.assertFalse(schema.restrict([H_(44), H_(0), 0]))
 
 
 if __name__ == "__main__":

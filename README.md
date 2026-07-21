@@ -4,7 +4,7 @@
 
 ## Repository Structure
 
-* **[`ci`](ci/)**: [Gitlab CI](https://gitlab.com/satoshilabs/trezor/trezor-firmware) configuration files
+* **[`ci`](ci/)**: Ancillary files, data, and scripts for the CI pipeline
 * **[`common/defs`](common/defs/)**: JSON coin definitions and support tables
 * **[`common/protob`](common/protob/)**: Common protobuf definitions for the Trezor protocol
 * **[`common/tools`](common/tools/)**: Tools for managing coin definitions and related data
@@ -29,7 +29,7 @@ Also please have a look at the docs, either in the `docs` folder or at  [docs.tr
 
 ## Security vulnerability disclosure
 
-Please report suspected security vulnerabilities in private to [security@satoshilabs.com](mailto:security@satoshilabs.com), also see [the disclosure section on the Trezor.io website](https://trezor.io/security/). Please do NOT create publicly viewable issues for suspected security vulnerabilities.
+Please report suspected security vulnerabilities in private to [security@satoshilabs.com](mailto:security@satoshilabs.com), also see [the disclosure section on the Trezor.io website](https://trezor.io/support/a/how-to-report-a-security-issue). Please do NOT create publicly viewable issues for suspected security vulnerabilities.
 
 ## Documentation
 

@@ -1,22 +1,33 @@
 from typing import TYPE_CHECKING
-from ubinascii import hexlify, unhexlify
+from ubinascii import hexlify
 
-from trezor import wire
-from trezor.enums import EthereumDataType
-from trezor.messages import EthereumFieldType
+from trezor import TR
+
+from . import networks
 
 if TYPE_CHECKING:
-    from .networks import NetworkInfo
+    from buffer_types import AnyBytes
+    from typing import Iterable
+
+    from trezor.messages import EthereumFieldType, EthereumTokenInfo
+    from trezor.ui.layouts import StrPropertyType
+
+    from .networks import EthereumNetworkInfo
+
+RSKIP60_NETWORKS = (30, 31)
 
 
-def address_from_bytes(address_bytes: bytes, network: NetworkInfo | None = None) -> str:
+def address_from_bytes(
+    address_bytes: AnyBytes, network: EthereumNetworkInfo = networks.UNKNOWN_NETWORK
+) -> str:
     """
     Converts address in bytes to a checksummed string as defined
     in https://github.com/ethereum/EIPs/blob/master/EIPS/eip-55.md
     """
     from trezor.crypto.hashlib import sha3_256
 
-    if network is not None and network.rskip60:
+    if network.chain_id in RSKIP60_NETWORKS:
+        # rskip60 is a different way to calculate checksum
         prefix = str(network.chain_id) + "0x"
     else:
         prefix = ""
@@ -24,7 +35,7 @@ def address_from_bytes(address_bytes: bytes, network: NetworkInfo | None = None)
     address_hex = hexlify(address_bytes).decode()
     digest = sha3_256((prefix + address_hex).encode(), keccak=True).digest()
 
-    def maybe_upper(i: int) -> str:
+    def _maybe_upper(i: int) -> str:
         """Uppercase i-th letter only if the corresponding nibble has high bit set."""
         digest_byte = digest[i // 2]
         hex_letter = address_hex[i]
@@ -39,10 +50,14 @@ def address_from_bytes(address_bytes: bytes, network: NetworkInfo | None = None)
         else:
             return hex_letter
 
-    return "0x" + "".join(maybe_upper(i) for i in range(len(address_hex)))
+    return "0x" + "".join(_maybe_upper(i) for i in range(len(address_hex)))
 
 
 def bytes_from_address(address: str) -> bytes:
+    from ubinascii import unhexlify
+
+    from trezor import wire
+
     if len(address) == 40:
         return unhexlify(address)
 
@@ -59,6 +74,8 @@ def bytes_from_address(address: str) -> bytes:
 
 def get_type_name(field: EthereumFieldType) -> str:
     """Create a string from type definition (like uint256 or bytes16)."""
+    from trezor.enums import EthereumDataType
+
     data_type = field.data_type
     size = field.size
 
@@ -95,12 +112,12 @@ def get_type_name(field: EthereumFieldType) -> str:
         return TYPE_TRANSLATION_DICT[data_type]
 
 
-def decode_typed_data(data: bytes, type_name: str) -> str:
+def decode_typed_data(data: AnyBytes, type_name: str) -> str:
     """Used by sign_typed_data module to show data to user."""
     if type_name.startswith("bytes"):
         return hexlify(data).decode()
     elif type_name == "string":
-        return data.decode()
+        return bytes(data).decode()
     elif type_name == "address":
         return address_from_bytes(data)
     elif type_name == "bool":
@@ -109,12 +126,94 @@ def decode_typed_data(data: bytes, type_name: str) -> str:
         return str(int.from_bytes(data, "big"))
     elif type_name.startswith("int"):
         # Micropython does not implement "signed" arg in int.from_bytes()
-        return str(from_bytes_bigendian_signed(data))
+        return str(_from_bytes_bigendian_signed(data))
 
     raise ValueError  # Unsupported data type for direct field decoding
 
 
-def from_bytes_bigendian_signed(b: bytes) -> int:
+def get_fee_items_regular(
+    gas_price: int, gas_limit: int, network: EthereumNetworkInfo
+) -> Iterable[StrPropertyType]:
+    # regular
+    gas_limit_str = TR.ethereum__units_template.format(gas_limit)
+    gas_price_str = format_ethereum_amount(
+        gas_price, None, network, force_unit_gwei=True
+    )
+
+    return (
+        (TR.ethereum__gas_limit, gas_limit_str, False),
+        (TR.ethereum__gas_price, gas_price_str, False),
+    )
+
+
+def get_fee_items_eip1559(
+    max_gas_fee: int,
+    max_priority_fee: int,
+    gas_limit: int,
+    network: EthereumNetworkInfo,
+) -> Iterable[StrPropertyType]:
+    # EIP-1559
+    gas_limit_str = TR.ethereum__units_template.format(gas_limit)
+    max_gas_fee_str = format_ethereum_amount(
+        max_gas_fee, None, network, force_unit_gwei=True
+    )
+    max_priority_fee_str = format_ethereum_amount(
+        max_priority_fee, None, network, force_unit_gwei=True
+    )
+
+    return (
+        (TR.ethereum__gas_limit, gas_limit_str, False),
+        (TR.ethereum__max_gas_price, max_gas_fee_str, False),
+        (TR.ethereum__priority_fee, max_priority_fee_str, False),
+    )
+
+
+def format_ethereum_amount(
+    value: int,
+    token: EthereumTokenInfo | None,
+    network: EthereumNetworkInfo,
+    force_unit_gwei: bool = False,
+) -> str:
+    from trezor.strings import format_amount
+
+    if token:
+        suffix = token.symbol
+        decimals = token.decimals
+    else:
+        suffix = network.symbol
+        decimals = 18
+
+    if force_unit_gwei:
+        assert token is None
+        assert decimals >= 9
+        decimals = decimals - 9
+        suffix = "Gwei"
+    elif decimals > 9 and value < 10 ** (decimals - 9):
+        # Don't want to display wei values for tokens with small decimal numbers
+        suffix = "Wei " + suffix
+        decimals = 0
+
+    amount = format_amount(value, decimals)
+    return f"{amount} {suffix}"
+
+
+def get_account_and_path(address_n: list[int]) -> tuple[str | None, str | None]:
+    from apps.common import paths
+
+    from .keychain import PATTERNS_ADDRESS
+
+    if not address_n or len(address_n) < 2:
+        return (None, None)
+
+    slip44_id = address_n[1]  # it depends on the network (ETH vs ETC...)
+
+    account = paths.get_account_name("ETH", address_n, PATTERNS_ADDRESS, slip44_id)
+    account_path = paths.address_n_to_str(address_n)
+
+    return (account, account_path)
+
+
+def _from_bytes_bigendian_signed(b: AnyBytes) -> int:
     negative = b[0] & 0x80
     if negative:
         neg_b = bytearray(b)

@@ -24,7 +24,8 @@ bool get_features(Features *resp) {
 #else
   const image_header *hdr =
       (const image_header *)FLASH_PTR(FLASH_FWHEADER_START);
-  if (SIG_OK == signatures_new_ok(hdr, NULL)) {
+  // allow both v2 and v3 signatures
+  if (SIG_OK == signatures_match(hdr, NULL)) {
     strlcpy(resp->fw_vendor, "SatoshiLabs", sizeof(resp->fw_vendor));
   } else {
     strlcpy(resp->fw_vendor, "UNSAFE, DO NOT USE!", sizeof(resp->fw_vendor));
@@ -59,8 +60,11 @@ bool get_features(Features *resp) {
   resp->has_imported = config_getImported(&(resp->imported));
   resp->has_unlocked = true;
   resp->unlocked = session_isUnlocked();
-  resp->has_needs_backup = true;
-  config_getNeedsBackup(&(resp->needs_backup));
+  resp->has_backup_availability = true;
+  bool needs_backup = false;
+  config_getNeedsBackup(&needs_backup);
+  resp->backup_availability = needs_backup ? BackupAvailability_Required
+                                           : BackupAvailability_NotAvailable;
   resp->has_unfinished_backup = true;
   config_getUnfinishedBackup(&(resp->unfinished_backup));
   resp->has_no_backup = true;
@@ -70,6 +74,8 @@ bool get_features(Features *resp) {
   strlcpy(resp->model, "1", sizeof(resp->model));
   resp->has_safety_checks = true;
   resp->safety_checks = config_getSafetyCheckLevel();
+  resp->has_busy = true;
+  resp->busy = trezor_is_busy();
   if (session_isUnlocked()) {
     resp->has_wipe_code_protection = true;
     resp->wipe_code_protection = config_hasWipeCode();
@@ -315,19 +321,25 @@ void fsm_msgResetDevice(const ResetDevice *msg) {
                   msg->strength == 192 || msg->strength == 256,
               _("Invalid seed strength"));
 
-  reset_init(msg->has_display_random && msg->display_random,
-             msg->has_strength ? msg->strength : 128,
+  fsm_abortWorkflows();
+
+  reset_init(msg->has_strength ? msg->strength : 128,
              msg->has_passphrase_protection && msg->passphrase_protection,
              msg->has_pin_protection && msg->pin_protection,
              msg->has_language ? msg->language : 0,
              msg->has_label ? msg->label : 0,
              msg->has_u2f_counter ? msg->u2f_counter : 0,
              msg->has_skip_backup ? msg->skip_backup : false,
-             msg->has_no_backup ? msg->no_backup : false);
+             msg->has_no_backup ? msg->no_backup : false,
+             msg->has_entropy_check ? msg->entropy_check : false);
 }
 
 void fsm_msgEntropyAck(const EntropyAck *msg) {
   reset_entropy(msg->entropy.bytes, msg->entropy.size);
+}
+
+void fsm_msgEntropyCheckContinue(const EntropyCheckContinue *msg) {
+  reset_continue(msg->has_finish ? msg->finish : false);
 }
 
 void fsm_msgBackupDevice(const BackupDevice *msg) {
@@ -488,7 +500,13 @@ void fsm_msgApplyFlags(const ApplyFlags *msg) {
 void fsm_msgRecoveryDevice(const RecoveryDevice *msg) {
   CHECK_PIN_UNCACHED
 
-  const bool dry_run = msg->has_dry_run ? msg->dry_run : false;
+  CHECK_PARAM(msg->type == RecoveryType_NormalRecovery ||
+                  msg->type == RecoveryType_DryRun,
+              _("UnlockRepeatedBackup not supported"))
+
+  fsm_abortWorkflows();
+
+  const bool dry_run = msg->has_type ? msg->type == RecoveryType_DryRun : false;
   if (!dry_run) {
     CHECK_NOT_INITIALIZED
   } else {
@@ -509,7 +527,7 @@ void fsm_msgRecoveryDevice(const RecoveryDevice *msg) {
                 msg->has_language ? msg->language : 0,
                 msg->has_label ? msg->label : 0,
                 msg->has_enforce_wordlist && msg->enforce_wordlist,
-                msg->has_type ? msg->type : 0,
+                msg->has_input_method ? msg->input_method : 0,
                 msg->has_u2f_counter ? msg->u2f_counter : 0, dry_run);
 }
 
@@ -535,7 +553,7 @@ void fsm_msgSetU2FCounter(const SetU2FCounter *msg) {
   layoutHome();
 }
 
-void fsm_msgGetNextU2FCounter() {
+void fsm_msgGetNextU2FCounter(void) {
   CHECK_PIN
 
   layoutDialogSwipe(&bmp_icon_question, _("Cancel"), _("Confirm"), NULL,
@@ -570,4 +588,15 @@ void fsm_msgGetFirmwareHash(const GetFirmwareHash *msg) {
   resp->hash.size = sizeof(resp->hash.bytes);
   msg_write(MessageType_MessageType_FirmwareHash, resp);
   layoutHome();
+}
+
+void fsm_msgSetBusy(const SetBusy *msg) {
+  if (msg->has_expiry_ms) {
+    trezor_set_busy(msg->expiry_ms);
+  } else {
+    trezor_set_busy(0);
+  }
+  fsm_sendSuccess(NULL);
+  layoutHome();
+  return;
 }

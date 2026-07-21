@@ -1,16 +1,17 @@
 from typing import TYPE_CHECKING
-from ubinascii import hexlify
-
-from trezor import utils, wire
-from trezor.crypto.hashlib import blake256, sha256
-
-from apps.common.writers import write_compact_size
 
 if TYPE_CHECKING:
+    from buffer_types import AnyBytes
+
     from apps.common.coininfo import CoinInfo
 
 
-def message_digest(coin: CoinInfo, message: bytes) -> bytes:
+def message_digest(coin: CoinInfo, message: AnyBytes) -> bytes:
+    from trezor import utils, wire
+    from trezor.crypto.hashlib import blake256, sha256
+
+    from apps.common.writers import write_compact_size
+
     if not utils.BITCOIN_ONLY and coin.decred:
         h = utils.HashWriter(blake256())
     else:
@@ -27,7 +28,9 @@ def message_digest(coin: CoinInfo, message: bytes) -> bytes:
     return ret
 
 
-def decode_message(message: bytes) -> str:
+def decode_message(message: AnyBytes) -> str:
+    from ubinascii import hexlify
+
     try:
         return bytes(message).decode()
     except UnicodeError:

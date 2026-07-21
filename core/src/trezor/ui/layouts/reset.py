@@ -1,6 +1,10 @@
-from . import UI2
+from trezor import utils
 
-if UI2:
-    from .tt_v2.reset import *  # noqa: F401,F403
-else:
-    from .tt.reset import *  # noqa: F401,F403
+if utils.UI_LAYOUT == "BOLT":
+    from .bolt.reset import *  # noqa: F401,F403
+elif utils.UI_LAYOUT == "CAESAR":
+    from .caesar.reset import *  # noqa: F401,F403
+elif utils.UI_LAYOUT == "DELIZIA":
+    from .delizia.reset import *  # noqa: F401,F403
+elif utils.UI_LAYOUT == "ECKHART":
+    from .eckhart.reset import *  # noqa: F401,F403

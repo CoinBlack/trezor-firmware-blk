@@ -1,30 +1,26 @@
 from micropython import const
 from typing import TYPE_CHECKING
 
-from trezor.messages import SignTx
-from trezor.utils import ensure
-from trezor.wire import DataError, ProcessError
+from trezor.wire import DataError
 
-from apps.bitcoin.common import ecdsa_sign
 from apps.bitcoin.sign_tx.bitcoinlike import Bitcoinlike
-from apps.common.writers import write_compact_size, write_uint32_le
-
-from .hasher import ZcashHasher
 
 if TYPE_CHECKING:
+    from buffer_types import AnyBytes
     from typing import Sequence
-    from apps.common.coininfo import CoinInfo
+
+    from trezor.messages import PrevTx, SignTx, TxInput, TxOutput
+    from trezor.utils import HashWriter
+
+    from apps.bitcoin.keychain import Keychain
+    from apps.bitcoin.sign_tx.approvers import Approver
     from apps.bitcoin.sign_tx.tx_info import OriginalTxInfo, TxInfo
     from apps.bitcoin.writers import Writer
-    from apps.bitcoin.sign_tx.approvers import Approver
-    from trezor.utils import HashWriter
-    from trezor.messages import (
-        PrevTx,
-        TxInput,
-    )
-    from apps.bitcoin.keychain import Keychain
+    from apps.common.coininfo import CoinInfo
 
-OVERWINTERED = const(0x8000_0000)
+    from .hasher import ZcashHasher
+
+_OVERWINTERED = const(0x8000_0000)
 
 
 class Zcash(Bitcoinlike):
@@ -35,6 +31,8 @@ class Zcash(Bitcoinlike):
         coin: CoinInfo,
         approver: Approver | None,
     ) -> None:
+        from trezor.utils import ensure
+
         ensure(coin.overwintered)
         if tx.version != 5:
             raise DataError("Expected transaction version 5.")
@@ -42,6 +40,8 @@ class Zcash(Bitcoinlike):
         super().__init__(tx, keychain, coin, approver)
 
     def create_sig_hasher(self, tx: SignTx | PrevTx) -> ZcashHasher:
+        from .hasher import ZcashHasher
+
         return ZcashHasher(tx)
 
     def create_hash_writer(self) -> HashWriter:
@@ -65,15 +65,19 @@ class Zcash(Bitcoinlike):
     async def sign_nonsegwit_input(self, i_sign: int) -> None:
         await self.sign_nonsegwit_bip143_input(i_sign)
 
-    def sign_bip143_input(self, i: int, txi: TxInput) -> tuple[bytes, bytes]:
-        signature_digest = self.tx_info.sig_hasher.hash_zip244(
-            txi, self.input_derive_script(txi)
-        )
+    def sign_bip143_input(self, i: int, txi: TxInput) -> tuple[AnyBytes, AnyBytes]:
+        from apps.bitcoin.common import ecdsa_sign
+
         node = self.keychain.derive(txi.address_n)
+        signature_digest = self.tx_info.sig_hasher.hash_zip244(
+            txi, self.input_derive_script(txi, node)
+        )
         signature = ecdsa_sign(node, signature_digest)
         return node.public_key(), signature
 
     async def process_original_input(self, txi: TxInput, script_pubkey: bytes) -> None:
+        from trezor.wire import ProcessError
+
         raise ProcessError("Replacement transactions are not supported.")
         # Zcash transaction fees are very low
         # so there is no need to bump the fee.
@@ -93,20 +97,50 @@ class Zcash(Bitcoinlike):
     def write_tx_header(
         self, w: Writer, tx: SignTx | PrevTx, witness_marker: bool
     ) -> None:
+        from apps.common.writers import write_uint32_le
+
         # defined in ZIP-225 (see https://zips.z.cash/zip-0225)
         assert tx.version_group_id is not None
         assert tx.branch_id is not None  # checked in sanitize_*
         assert tx.expiry is not None
 
-        write_uint32_le(w, tx.version | OVERWINTERED)  # nVersion | fOverwintered
-        write_uint32_le(w, tx.version_group_id)  # nVersionGroupId
-        write_uint32_le(w, tx.branch_id)  # nConsensusBranchId
-        write_uint32_le(w, tx.lock_time)  # lock_time
-        write_uint32_le(w, tx.expiry)  # expiryHeight
+        for num in (
+            tx.version | _OVERWINTERED,  # nVersion | fOverwintered
+            tx.version_group_id,  # nVersionGroupId
+            tx.branch_id,  # nConsensusBranchId
+            tx.lock_time,  # lock_time
+            tx.expiry,  # expiryHeight
+        ):
+            write_uint32_le(w, num)
 
     def write_tx_footer(self, w: Writer, tx: SignTx | PrevTx) -> None:
+        from apps.common.writers import write_compact_size
+
         # serialize Sapling bundle
         write_compact_size(w, 0)  # nSpendsSapling
         write_compact_size(w, 0)  # nOutputsSapling
         # serialize Orchard bundle
         write_compact_size(w, 0)  # nActionsOrchard
+
+    def output_derive_script(self, txo: TxOutput) -> AnyBytes:
+        from trezor.enums import OutputScriptType
+
+        from apps.bitcoin import scripts
+
+        from .unified_addresses import Typecode, decode
+
+        # unified addresses
+        if txo.address is not None and txo.address[0] == "u":
+            assert txo.script_type is OutputScriptType.PAYTOADDRESS
+
+            receivers = decode(txo.address, self.coin)
+            if Typecode.P2PKH in receivers:
+                pubkeyhash = receivers[Typecode.P2PKH]
+                return scripts.output_script_p2pkh(pubkeyhash)
+            if Typecode.P2SH in receivers:
+                scripthash = receivers[Typecode.P2SH]
+                return scripts.output_script_p2sh(scripthash)
+            raise DataError("Unified address does not include a transparent receiver.")
+
+        # transparent addresses
+        return super().output_derive_script(txo)

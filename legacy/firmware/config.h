@@ -21,8 +21,10 @@
 #define __CONFIG_H__
 
 #include "bip32.h"
+#include "messages-bitcoin.pb.h"
 #include "messages-common.pb.h"
 #include "messages-management.pb.h"
+#include "messages.pb.h"
 
 #define STORAGE_FIELD(TYPE, NAME) \
   bool has_##NAME;                \
@@ -102,6 +104,10 @@ void config_loadDevice(const LoadDevice *msg);
 
 const uint8_t *config_getSeed(void);
 
+bool config_setCoinJoinAuthorization(const AuthorizeCoinJoin *authorization);
+MessageType config_getAuthorizationType(void);
+const AuthorizeCoinJoin *config_getCoinJoinAuthorization(void);
+
 bool config_getU2FRoot(HDNode *node);
 bool config_getRootNode(HDNode *node, const char *curve);
 
@@ -133,7 +139,7 @@ bool config_getPin(char *dest, uint16_t dest_size);
 
 bool config_unlock(const char *pin);
 bool config_hasPin(void);
-bool config_changePin(const char *old_pin, const char *new_pin);
+bool config_changePin(const char *new_pin);
 bool session_isUnlocked(void);
 
 bool config_hasWipeCode(void);

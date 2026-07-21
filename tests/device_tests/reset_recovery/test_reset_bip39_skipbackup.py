@@ -18,44 +18,42 @@ import pytest
 from mnemonic import Mnemonic
 
 from trezorlib import messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib.debuglink import DebugSession as Session
 
-from ...common import generate_entropy
+from ...common import EXTERNAL_ENTROPY, generate_entropy
 
-pytestmark = pytest.mark.skip_t2
+pytestmark = pytest.mark.models("legacy")
 
-EXTERNAL_ENTROPY = b"zlutoucky kun upel divoke ody" * 2
 STRENGTH = 128
 
 
 @pytest.mark.setup_client(uninitialized=True)
-def test_reset_device_skip_backup(client: Client):
-    ret = client.call_raw(
+def test_reset_device_skip_backup(session: Session):
+    debug = session.debug
+    ret = session.call_raw(
         messages.ResetDevice(
-            display_random=False,
             strength=STRENGTH,
             passphrase_protection=False,
             pin_protection=False,
-            language="en-US",
             label="test",
             skip_backup=True,
         )
     )
 
     assert isinstance(ret, messages.ButtonRequest)
-    client.debug.press_yes()
-    ret = client.call_raw(messages.ButtonAck())
+    debug.press_yes()
+    ret = session.call_raw(messages.ButtonAck())
 
     # Provide entropy
     assert isinstance(ret, messages.EntropyRequest)
-    internal_entropy = client.debug.state().reset_entropy
-    ret = client.call_raw(messages.EntropyAck(entropy=EXTERNAL_ENTROPY))
+    internal_entropy = debug.state().reset_entropy
+    ret = session.call_raw(messages.EntropyAck(entropy=EXTERNAL_ENTROPY))
     assert isinstance(ret, messages.Success)
 
     # Check if device is properly initialized
-    ret = client.call_raw(messages.Initialize())
+    ret = session.call_raw(messages.GetFeatures())
     assert ret.initialized is True
-    assert ret.needs_backup is True
+    assert ret.backup_availability == messages.BackupAvailability.Required
     assert ret.unfinished_backup is False
     assert ret.no_backup is False
 
@@ -64,14 +62,14 @@ def test_reset_device_skip_backup(client: Client):
     expected_mnemonic = Mnemonic("english").to_mnemonic(entropy)
 
     # start Backup workflow
-    ret = client.call_raw(messages.BackupDevice())
+    ret = session.call_raw(messages.BackupDevice())
 
     mnemonic = []
     for _ in range(STRENGTH // 32 * 3):
         assert isinstance(ret, messages.ButtonRequest)
-        mnemonic.append(client.debug.read_reset_word())
-        client.debug.press_yes()
-        client.call_raw(messages.ButtonAck())
+        mnemonic.append(debug.read_reset_word())
+        debug.press_yes()
+        session.call_raw(messages.ButtonAck())
 
     mnemonic = " ".join(mnemonic)
 
@@ -81,9 +79,9 @@ def test_reset_device_skip_backup(client: Client):
     mnemonic = []
     for _ in range(STRENGTH // 32 * 3):
         assert isinstance(ret, messages.ButtonRequest)
-        mnemonic.append(client.debug.read_reset_word())
-        client.debug.press_yes()
-        ret = client.call_raw(messages.ButtonAck())
+        mnemonic.append(debug.read_reset_word())
+        debug.press_yes()
+        ret = session.call_raw(messages.ButtonAck())
 
     assert isinstance(ret, messages.Success)
 
@@ -93,80 +91,63 @@ def test_reset_device_skip_backup(client: Client):
     assert mnemonic == expected_mnemonic
 
     # start backup again - should fail
-    ret = client.call_raw(messages.BackupDevice())
+    ret = session.call_raw(messages.BackupDevice())
     assert isinstance(ret, messages.Failure)
 
 
 @pytest.mark.setup_client(uninitialized=True)
-def test_reset_device_skip_backup_break(client: Client):
-    ret = client.call_raw(
+def test_reset_device_skip_backup_break(session: Session):
+    debug = session.debug
+    ret = session.call_raw(
         messages.ResetDevice(
-            display_random=False,
             strength=STRENGTH,
             passphrase_protection=False,
             pin_protection=False,
-            language="en-US",
             label="test",
             skip_backup=True,
         )
     )
 
     assert isinstance(ret, messages.ButtonRequest)
-    client.debug.press_yes()
-    ret = client.call_raw(messages.ButtonAck())
+    debug.press_yes()
+    ret = session.call_raw(messages.ButtonAck())
 
     # Provide entropy
     assert isinstance(ret, messages.EntropyRequest)
-    ret = client.call_raw(messages.EntropyAck(entropy=EXTERNAL_ENTROPY))
+    ret = session.call_raw(messages.EntropyAck(entropy=EXTERNAL_ENTROPY))
     assert isinstance(ret, messages.Success)
 
     # Check if device is properly initialized
-    ret = client.call_raw(messages.Initialize())
+    ret = session.call_raw(messages.GetFeatures())
     assert ret.initialized is True
-    assert ret.needs_backup is True
+    assert ret.backup_availability == messages.BackupAvailability.Required
     assert ret.unfinished_backup is False
     assert ret.no_backup is False
 
     # start Backup workflow
-    ret = client.call_raw(messages.BackupDevice())
+    ret = session.call_raw(messages.BackupDevice())
 
     # send Initialize -> break workflow
-    ret = client.call_raw(messages.Initialize())
+    ret = session.call_raw(messages.Initialize())
     assert isinstance(ret, messages.Features)
     assert ret.initialized is True
-    assert ret.needs_backup is False
+    assert ret.backup_availability == messages.BackupAvailability.NotAvailable
     assert ret.unfinished_backup is True
     assert ret.no_backup is False
 
     # start backup again - should fail
-    ret = client.call_raw(messages.BackupDevice())
+    ret = session.call_raw(messages.BackupDevice())
     assert isinstance(ret, messages.Failure)
 
     # read Features again
-    ret = client.call_raw(messages.Initialize())
+    ret = session.call_raw(messages.Initialize())
     assert isinstance(ret, messages.Features)
     assert ret.initialized is True
-    assert ret.needs_backup is False
+    assert ret.backup_availability == messages.BackupAvailability.NotAvailable
     assert ret.unfinished_backup is True
     assert ret.no_backup is False
 
 
-def test_initialized_device_backup_fail(client: Client):
-    ret = client.call_raw(messages.BackupDevice())
-    assert isinstance(ret, messages.Failure)
-
-
-@pytest.mark.setup_client(uninitialized=True)
-def test_reset_device_skip_backup_show_entropy_fail(client: Client):
-    ret = client.call_raw(
-        messages.ResetDevice(
-            display_random=True,
-            strength=STRENGTH,
-            passphrase_protection=False,
-            pin_protection=False,
-            language="en-US",
-            label="test",
-            skip_backup=True,
-        )
-    )
+def test_initialized_device_backup_fail(session: Session):
+    ret = session.call_raw(messages.BackupDevice())
     assert isinstance(ret, messages.Failure)

@@ -24,44 +24,6 @@
             }
         },
         {
-            "name": "Ropsten",
-            "parameters": {
-                "chain_id": 3,
-                "path": "m/44'/1'/0'/0/0",
-                "nonce": "0x0",
-                "gas_price": "0x4a817c800",
-                "gas_limit": "0x5208",
-                "value": "0x2540be400",
-                "to_address": "0x8eA7a3fccC211ED48b763b4164884DDbcF3b0A98",
-                "tx_type": null,
-                "data": ""
-            },
-            "result": {
-                "sig_v": 42,
-                "sig_r": "9d49a5c234a134bc56d00a7cf0c208c97d746f002c1fd3609b643eb8ef99d07d",
-                "sig_s": "3f064e133624cb59f8103fd5de76c089d8754e3da233a59d2ab2ca47fc306837"
-            }
-        },
-        {
-            "name": "Rinkeby",
-            "parameters": {
-                "chain_id": 4,
-                "path": "m/44'/1'/0'/0/0",
-                "nonce": "0x0",
-                "gas_price": "0x4a817c800",
-                "gas_limit": "0x5208",
-                "value": "0x2540be400",
-                "to_address": "0x8eA7a3fccC211ED48b763b4164884DDbcF3b0A98",
-                "tx_type": null,
-                "data": ""
-            },
-            "result": {
-                "sig_v": 43,
-                "sig_r": "79a9fd0391f027ed518f3d796a598bf33eef0fb30ef22568a140d674d6b0b76c",
-                "sig_s": "408cd459abafcdb7f2e415b269c85a308aad4c53e63c01d3431d3db6ab6292dd"
-            }
-        },
-        {
             "name": "ETC",
             "parameters": {
                 "chain_id": 61,
@@ -230,6 +192,25 @@
                 "sig_v": 36893488147419103266,
                 "sig_r": "7bf581e8c7ff7d0e94d25eaa476de928d444b180fe50a91374b8883ff5dee3a8",
                 "sig_s": "3a3efa7a3f97043a999b3183d958a03126ec2652608c376c4626850b9b6a33fa"
+            }
+        },
+        {
+            "name": "Ledger Live legacy path",
+            "parameters": {
+                "chain_id": 1,
+                "path": "m/44'/60'/0'/0",
+                "nonce": "0x0",
+                "gas_price": "0x4a817c800",
+                "gas_limit": "0x5208",
+                "value": "0x2540be400",
+                "to_address": "0x8eA7a3fccC211ED48b763b4164884DDbcF3b0A98",
+                "tx_type": null,
+                "data": ""
+            },
+            "result": {
+                "sig_v": 37,
+                "sig_r": "08a16c651ffdf9e59c1bd8398d788bc98c86d6c0d7f6bc07977d557b0851c01b",
+                "sig_s": "1e2adc9ef0b7f17a6385230783349706c0cc0bfef40c45ea5b23c09543b17c28"
             }
         }
     ]

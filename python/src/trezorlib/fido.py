@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -14,42 +14,48 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
-from typing import TYPE_CHECKING, List
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Sequence
 
 from . import messages
-from .tools import expect
+from .tools import workflow
 
 if TYPE_CHECKING:
-    from .client import TrezorClient
-    from .protobuf import MessageType
+    from .client import Session
 
 
-@expect(
-    messages.WebAuthnCredentials,
-    field="credentials",
-    ret_type=List[messages.WebAuthnCredential],
-)
-def list_credentials(client: "TrezorClient") -> "MessageType":
-    return client.call(messages.WebAuthnListResidentCredentials())
+@workflow()
+def list_credentials(session: "Session") -> Sequence[messages.WebAuthnCredential]:
+    return session.call(
+        messages.WebAuthnListResidentCredentials(), expect=messages.WebAuthnCredentials
+    ).credentials
 
 
-@expect(messages.Success, field="message", ret_type=str)
-def add_credential(client: "TrezorClient", credential_id: bytes) -> "MessageType":
-    return client.call(
-        messages.WebAuthnAddResidentCredential(credential_id=credential_id)
+@workflow()
+def add_credential(session: "Session", credential_id: bytes) -> None:
+    session.call(
+        messages.WebAuthnAddResidentCredential(credential_id=credential_id),
+        expect=messages.Success,
     )
 
 
-@expect(messages.Success, field="message", ret_type=str)
-def remove_credential(client: "TrezorClient", index: int) -> "MessageType":
-    return client.call(messages.WebAuthnRemoveResidentCredential(index=index))
+@workflow()
+def remove_credential(session: "Session", index: int) -> None:
+    session.call(
+        messages.WebAuthnRemoveResidentCredential(index=index), expect=messages.Success
+    )
 
 
-@expect(messages.Success, field="message", ret_type=str)
-def set_counter(client: "TrezorClient", u2f_counter: int) -> "MessageType":
-    return client.call(messages.SetU2FCounter(u2f_counter=u2f_counter))
+@workflow()
+def set_counter(session: "Session", u2f_counter: int) -> None:
+    session.call(
+        messages.SetU2FCounter(u2f_counter=u2f_counter), expect=messages.Success
+    )
 
 
-@expect(messages.NextU2FCounter, field="u2f_counter", ret_type=int)
-def get_next_counter(client: "TrezorClient") -> "MessageType":
-    return client.call(messages.GetNextU2FCounter())
+@workflow()
+def get_next_counter(session: "Session") -> int:
+    return session.call(
+        messages.GetNextU2FCounter(), expect=messages.NextU2FCounter
+    ).u2f_counter

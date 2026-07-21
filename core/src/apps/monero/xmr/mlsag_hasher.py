@@ -1,11 +1,9 @@
 from typing import TYPE_CHECKING
 
-from apps.monero.xmr import crypto_helpers
-from apps.monero.xmr.keccak_hasher import KeccakXmrArchive
-
 if TYPE_CHECKING:
     from trezor.utils import HashContext
-    from .serialize_messages.tx_rsig_bulletproof import Bulletproof, BulletproofPlus
+
+    from .serialize_messages.tx_rsig_bulletproof import BulletproofPlus
 
 
 class PreMlsagHasher:
@@ -14,6 +12,9 @@ class PreMlsagHasher:
     """
 
     def __init__(self) -> None:
+        from apps.monero.xmr import crypto_helpers
+        from apps.monero.xmr.keccak_hasher import KeccakXmrArchive
+
         self.state = 0
         self.kc_master: HashContext = crypto_helpers.get_keccak()
         self.rsig_hasher: HashContext = crypto_helpers.get_keccak()
@@ -57,10 +58,11 @@ class PreMlsagHasher:
         self.rtcsig_hasher = None  # type: ignore
 
     def rsig_val(
-        self, p: bytes | list[bytes] | Bulletproof | BulletproofPlus, raw: bool = False
+        self, p: bytes | list[bytes] | BulletproofPlus, raw: bool = False
     ) -> None:
         if self.state == 8:
             raise ValueError("State error")
+        update = self.rsig_hasher.update  # local_cache_attribute
 
         if raw:
             # Avoiding problem with the memory fragmentation.
@@ -69,36 +71,22 @@ class PreMlsagHasher:
             # preserving the byte ordering
             if isinstance(p, list):
                 for x in p:
-                    self.rsig_hasher.update(x)
+                    update(x)
             else:
                 assert isinstance(p, bytes)
-                self.rsig_hasher.update(p)
+                update(p)
             return
 
-        from .serialize_messages.tx_rsig_bulletproof import Bulletproof, BulletproofPlus
-
-        is_plus = isinstance(p, BulletproofPlus)
-        assert isinstance(p, Bulletproof) or is_plus
-
         # Hash Bulletproof
-        fields = (
-            (p.A, p.A1, p.B, p.r1, p.s1, p.d1)
-            if is_plus
-            else (p.A, p.S, p.T1, p.T2, p.taux, p.mu)
-        )
+        fields = (p.A, p.A1, p.B, p.r1, p.s1, p.d1)
         for fld in fields:
-            self.rsig_hasher.update(fld)
+            update(fld)
 
         del (fields,)
         for i in range(len(p.L)):
-            self.rsig_hasher.update(p.L[i])
+            update(p.L[i])
         for i in range(len(p.R)):
-            self.rsig_hasher.update(p.R[i])
-
-        if not is_plus:
-            self.rsig_hasher.update(p.a)
-            self.rsig_hasher.update(p.b)
-            self.rsig_hasher.update(p.t)
+            update(p.R[i])
 
     def get_digest(self) -> bytes:
         if self.state != 6:

@@ -150,7 +150,7 @@ const char *requestPin(PinMatrixRequestType type, const char *text) {
 }
 
 secbool protectPinUiCallback(uint32_t wait, uint32_t progress,
-                             const char *message) {
+                             enum storage_ui_message_t message) {
   // Convert wait to secstr string.
   char secstrbuf[] = _("________0 seconds");
   char *secstr = secstrbuf + 9;
@@ -165,7 +165,27 @@ secbool protectPinUiCallback(uint32_t wait, uint32_t progress,
     secstrbuf[16] = 0;
   }
   oledClear();
-  oledDrawStringCenter(OLED_WIDTH / 2, 0 * 9, message, FONT_STANDARD);
+
+  const char *message_str = NULL;
+  switch (message) {
+    case VERIFYING_PIN_MSG:
+      message_str = _("Verifying PIN");
+      break;
+    case PROCESSING_MSG:
+      message_str = _("Processing");
+      break;
+    case STARTING_MSG:
+      message_str = _("Starting up");
+      break;
+    case WRONG_PIN_MSG:
+      message_str = _("Wrong PIN");
+      break;
+    default:
+      message_str = _("");
+      break;
+  }
+
+  oledDrawStringCenter(OLED_WIDTH / 2, 0 * 9, message_str, FONT_STANDARD);
   oledDrawStringCenter(OLED_WIDTH / 2, 2 * 9, _("Please wait"), FONT_STANDARD);
   oledDrawStringCenter(OLED_WIDTH / 2, 3 * 9, secstr, FONT_STANDARD);
   oledDrawStringCenter(OLED_WIDTH / 2, 4 * 9, _("to continue ..."),
@@ -216,7 +236,6 @@ bool protectPin(bool use_cached) {
 }
 
 bool protectChangePin(bool removal) {
-  static CONFIDENTIAL char old_pin[MAX_PIN_LEN + 1] = "";
   static CONFIDENTIAL char new_pin[MAX_PIN_LEN + 1] = "";
   const char *pin = NULL;
 
@@ -228,25 +247,19 @@ bool protectChangePin(bool removal) {
       return false;
     }
 
-    // If removing, defer the check to config_changePin().
-    if (!removal) {
-      usbTiny(1);
-      bool ret = config_unlock(pin);
-      usbTiny(0);
-      if (ret == false) {
-        fsm_sendFailure(FailureType_Failure_PinInvalid, NULL);
-        return false;
-      }
+    usbTiny(1);
+    bool ret = config_unlock(pin);
+    usbTiny(0);
+    if (ret == false) {
+      fsm_sendFailure(FailureType_Failure_PinInvalid, NULL);
+      return false;
     }
-
-    strlcpy(old_pin, pin, sizeof(old_pin));
   }
 
   if (!removal) {
     pin = requestPin(PinMatrixRequestType_PinMatrixRequestType_NewFirst,
                      _("Please enter new PIN:"));
     if (pin == NULL || pin[0] == '\0') {
-      memzero(old_pin, sizeof(old_pin));
       fsm_sendFailure(FailureType_Failure_PinCancelled, NULL);
       return false;
     }
@@ -255,30 +268,23 @@ bool protectChangePin(bool removal) {
     pin = requestPin(PinMatrixRequestType_PinMatrixRequestType_NewSecond,
                      _("Please re-enter new PIN:"));
     if (pin == NULL) {
-      memzero(old_pin, sizeof(old_pin));
       memzero(new_pin, sizeof(new_pin));
       fsm_sendFailure(FailureType_Failure_PinCancelled, NULL);
       return false;
     }
 
     if (strncmp(new_pin, pin, sizeof(new_pin)) != 0) {
-      memzero(old_pin, sizeof(old_pin));
       memzero(new_pin, sizeof(new_pin));
       fsm_sendFailure(FailureType_Failure_PinMismatch, NULL);
       return false;
     }
   }
 
-  bool ret = config_changePin(old_pin, new_pin);
-  memzero(old_pin, sizeof(old_pin));
+  bool ret = config_changePin(new_pin);
   memzero(new_pin, sizeof(new_pin));
   if (ret == false) {
-    if (removal) {
-      fsm_sendFailure(FailureType_Failure_PinInvalid, NULL);
-    } else {
-      fsm_sendFailure(FailureType_Failure_ProcessError,
-                      _("The new PIN must be different from your wipe code."));
-    }
+    fsm_sendFailure(FailureType_Failure_ProcessError,
+                    _("The new PIN must be different from your wipe code."));
   }
   return ret;
 }

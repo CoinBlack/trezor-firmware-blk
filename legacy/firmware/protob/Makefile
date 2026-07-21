@@ -2,20 +2,30 @@ ifneq ($(V),1)
 Q := @
 endif
 
-SKIPPED_MESSAGES := Binance Cardano DebugMonero Eos Monero Ontology Ripple SdProtect Tezos WebAuthn \
-	DebugLinkRecordScreen DebugLinkEraseSdCard DebugLinkWatchLayout \
-	GetOwnershipProof OwnershipProof GetOwnershipId OwnershipId AuthorizeCoinJoin DoPreauthorized \
-	CancelAuthorization DebugLinkLayout GetNonce \
-	TxAckInput TxAckOutput TxAckPrev TxAckPaymentRequest \
+SKIPPED_MESSAGES := Cardano DebugMonero Eos Monero Ontology Ripple SdProtect Tezos Tron WebAuthn \
+	DebugLinkGetPairingInfo DebugLinkPairingInfo DebugLinkGetGcInfo DebugLinkGcInfoItem \
+	DebugLinkGcInfo DebugLinkRecordScreen DebugLinkEraseSdCard DebugLinkWatchLayout \
+	DebugLinkLayout DebugLinkResetDebugEvents GetNonce \
+	TxAckInput TxAckOutput TxAckPrev PaymentRequest \
 	EthereumSignTypedData EthereumTypedDataStructRequest EthereumTypedDataStructAck \
-	EthereumTypedDataValueRequest EthereumTypedDataValueAck
+	EthereumTypedDataValueRequest EthereumTypedDataValueAck ShowDeviceTutorial \
+	UnlockBootloader AuthenticateDevice AuthenticityProof \
+	Solana StellarClaimClaimableBalanceOp \
+	ChangeLanguage DataChunkRequest DataChunkAck Thp \
+	SetBrightness DebugLinkOptigaSetSecMax DebugLinkSetLogFilter \
+	BenchmarkListNames BenchmarkRun BenchmarkNames BenchmarkResult \
+	NostrGetPubkey NostrPubkey NostrSignEvent NostrEventSignature \
+	BleUnpair PaymentNotification Evolu \
+	GetSerialNumber SerialNumber \
+	TelemetryGet, Telemetry
 
 ifeq ($(BITCOIN_ONLY), 1)
 SKIPPED_MESSAGES += Ethereum NEM Stellar
 endif
 
 PROTO_NAMES = messages messages-bitcoin messages-common messages-crypto messages-debug \
-	messages-ethereum messages-management messages-nem messages-stellar
+	messages-ethereum messages-definitions messages-management messages-nem \
+	messages-stellar options
 
 PROTO_OPTIONS = $(PROTO_NAMES:=.options)
 PROTO_COMPILED = $(PROTO_NAMES:=.pb)
@@ -42,7 +52,7 @@ messages.pb.h: $(PROTO_COMPILED) $(PROTO_OPTIONS)
 	@printf "  PROTOC  $@\n"
 	$(Q)protoc -I/usr/include -I. $< --python_out=.
 
-messages_map.h messages_map_limits.h: messages_map.py messages_pb2.py
+messages_map.h messages_map_limits.h: messages_map.py messages_pb2.py options_pb2.py
 	$(Q)$(PYTHON) $< ${SKIPPED_MESSAGES}
 
 clean:

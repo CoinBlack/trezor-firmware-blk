@@ -16,19 +16,19 @@
 
 import pytest
 
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib.debuglink import DebugSession as Session
 from trezorlib.tezos import get_public_key
 from trezorlib.tools import parse_path
 
 
 @pytest.mark.altcoin
 @pytest.mark.tezos
-@pytest.mark.skip_t1
-def test_tezos_get_public_key(client: Client):
+@pytest.mark.models("core")
+def test_tezos_get_public_key(session: Session):
     path = parse_path("m/44h/1729h/0h")
-    pk = get_public_key(client, path)
+    pk = get_public_key(session, path)
     assert pk == "edpkttLhEbVfMC3DhyVVFzdwh8ncRnEWiLD1x8TAuPU7vSJak7RtBX"
 
     path = parse_path("m/44h/1729h/1h")
-    pk = get_public_key(client, path)
+    pk = get_public_key(session, path)
     assert pk == "edpkuTPqWjcApwyD3VdJhviKM5C13zGk8c4m87crgFarQboF3Mp56f"

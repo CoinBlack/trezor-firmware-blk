@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -15,17 +15,23 @@
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
 import json
-from typing import TYPE_CHECKING, Optional, TextIO
+from typing import TYPE_CHECKING, Any, Optional, TextIO
 
 import click
 
 from .. import cardano, messages, tools
-from . import ChoiceType, with_client
+from . import ChoiceType, with_session
 
 if TYPE_CHECKING:
-    from ..client import TrezorClient
+    from ..client import Session
 
-PATH_HELP = "BIP-32 path to key, e.g. m/44'/1815'/0'/0/0"
+PATH_HELP = "BIP-32 path to key, e.g. m/44h/1815h/0h/0/0"
+
+TESTNET_CHOICES = {
+    "preprod": "testnet_preprod",
+    "preview": "testnet_preview",
+    "legacy": "testnet_legacy",
+}
 
 
 @click.group(name="cardano")
@@ -46,7 +52,7 @@ def cli() -> None:
     "-p", "--protocol-magic", type=int, default=cardano.PROTOCOL_MAGICS["mainnet"]
 )
 @click.option("-N", "--network-id", type=int, default=cardano.NETWORK_IDS["mainnet"])
-@click.option("-t", "--testnet", is_flag=True)
+@click.option("-t", "--testnet", type=ChoiceType(TESTNET_CHOICES))
 @click.option(
     "-D",
     "--derivation-type",
@@ -54,22 +60,26 @@ def cli() -> None:
     default=messages.CardanoDerivationType.ICARUS,
 )
 @click.option("-i", "--include-network-id", is_flag=True)
-@with_client
+@click.option("-C", "--chunkify", is_flag=True)
+@click.option("-T", "--tag-cbor-sets", is_flag=True)
+@with_session(cardano=True)
 def sign_tx(
-    client: "TrezorClient",
+    session: "Session",
     file: TextIO,
     signing_mode: messages.CardanoTxSigningMode,
     protocol_magic: int,
     network_id: int,
-    testnet: bool,
+    testnet: str,
     derivation_type: messages.CardanoDerivationType,
     include_network_id: bool,
+    chunkify: bool,
+    tag_cbor_sets: bool,
 ) -> cardano.SignTxResponse:
     """Sign Cardano transaction."""
     transaction = json.load(file)
 
     if testnet:
-        protocol_magic = cardano.PROTOCOL_MAGICS["testnet"]
+        protocol_magic = cardano.PROTOCOL_MAGICS[testnet]
         network_id = cardano.NETWORK_IDS["testnet"]
 
     inputs = [cardano.parse_input(input) for input in transaction["inputs"]]
@@ -113,9 +123,8 @@ def sign_tx(
         for p in transaction["additional_witness_requests"]
     ]
 
-    client.init_device(derive_cardano=True)
     sign_tx_response = cardano.sign_tx(
-        client,
+        session,
         signing_mode,
         inputs,
         outputs,
@@ -137,6 +146,8 @@ def sign_tx(
         additional_witness_requests,
         derivation_type=derivation_type,
         include_network_id=include_network_id,
+        chunkify=chunkify,
+        tag_cbor_sets=tag_cbor_sets,
     )
 
     sign_tx_response["tx_hash"] = sign_tx_response["tx_hash"].hex()
@@ -145,9 +156,11 @@ def sign_tx(
             "type": witness["type"],
             "pub_key": witness["pub_key"].hex(),
             "signature": witness["signature"].hex(),
-            "chain_code": witness["chain_code"].hex()
-            if witness["chain_code"] is not None
-            else None,
+            "chain_code": (
+                witness["chain_code"].hex()
+                if witness["chain_code"] is not None
+                else None
+            ),
         }
         for witness in sign_tx_response["witnesses"]
     ]
@@ -156,9 +169,13 @@ def sign_tx(
         auxiliary_data_supplement["auxiliary_data_hash"] = auxiliary_data_supplement[
             "auxiliary_data_hash"
         ].hex()
-        catalyst_signature = auxiliary_data_supplement.get("catalyst_signature")
-        if catalyst_signature:
-            auxiliary_data_supplement["catalyst_signature"] = catalyst_signature.hex()
+        cvote_registration_signature = auxiliary_data_supplement.get(
+            "cvote_registration_signature"
+        )
+        if cvote_registration_signature:
+            auxiliary_data_supplement["cvote_registration_signature"] = (
+                cvote_registration_signature.hex()
+            )
         sign_tx_response["auxiliary_data_supplement"] = auxiliary_data_supplement
     return sign_tx_response
 
@@ -183,16 +200,17 @@ def sign_tx(
     "-p", "--protocol-magic", type=int, default=cardano.PROTOCOL_MAGICS["mainnet"]
 )
 @click.option("-N", "--network-id", type=int, default=cardano.NETWORK_IDS["mainnet"])
-@click.option("-e", "--testnet", is_flag=True)
+@click.option("-e", "--testnet", type=ChoiceType(TESTNET_CHOICES))
 @click.option(
     "-D",
     "--derivation-type",
     type=ChoiceType({m.name: m for m in messages.CardanoDerivationType}),
     default=messages.CardanoDerivationType.ICARUS,
 )
-@with_client
+@click.option("-C", "--chunkify", is_flag=True)
+@with_session(cardano=True)
 def get_address(
-    client: "TrezorClient",
+    session: "Session",
     address: str,
     address_type: messages.CardanoAddressType,
     staking_address: str,
@@ -205,8 +223,9 @@ def get_address(
     protocol_magic: int,
     network_id: int,
     show_display: bool,
-    testnet: bool,
+    testnet: str,
     derivation_type: messages.CardanoDerivationType,
+    chunkify: bool,
 ) -> str:
     """
     Get Cardano address.
@@ -223,7 +242,7 @@ def get_address(
     Byron, enterprise and reward addresses only require the general parameters.
     """
     if testnet:
-        protocol_magic = cardano.PROTOCOL_MAGICS["testnet"]
+        protocol_magic = cardano.PROTOCOL_MAGICS[testnet]
         network_id = cardano.NETWORK_IDS["testnet"]
 
     staking_key_hash_bytes = cardano.parse_optional_bytes(staking_key_hash)
@@ -242,14 +261,14 @@ def get_address(
         script_staking_hash_bytes,
     )
 
-    client.init_device(derive_cardano=True)
     return cardano.get_address(
-        client,
+        session,
         address_parameters,
         protocol_magic,
         network_id,
         show_display,
         derivation_type=derivation_type,
+        chunkify=chunkify,
     )
 
 
@@ -261,16 +280,19 @@ def get_address(
     type=ChoiceType({m.name: m for m in messages.CardanoDerivationType}),
     default=messages.CardanoDerivationType.ICARUS,
 )
-@with_client
+@click.option("-d", "--show-display", is_flag=True)
+@with_session(cardano=True)
 def get_public_key(
-    client: "TrezorClient",
+    session: "Session",
     address: str,
     derivation_type: messages.CardanoDerivationType,
+    show_display: bool,
 ) -> messages.CardanoPublicKey:
     """Get Cardano public key."""
     address_n = tools.parse_path(address)
-    client.init_device(derive_cardano=True)
-    return cardano.get_public_key(client, address_n, derivation_type=derivation_type)
+    return cardano.get_public_key(
+        session, address_n, derivation_type=derivation_type, show_display=show_display
+    )
 
 
 @cli.command()
@@ -287,9 +309,9 @@ def get_public_key(
     type=ChoiceType({m.name: m for m in messages.CardanoDerivationType}),
     default=messages.CardanoDerivationType.ICARUS,
 )
-@with_client
+@with_session(cardano=True)
 def get_native_script_hash(
-    client: "TrezorClient",
+    session: "Session",
     file: TextIO,
     display_format: messages.CardanoNativeScriptHashDisplayFormat,
     derivation_type: messages.CardanoDerivationType,
@@ -298,7 +320,37 @@ def get_native_script_hash(
     native_script_json = json.load(file)
     native_script = cardano.parse_native_script(native_script_json)
 
-    client.init_device(derive_cardano=True)
     return cardano.get_native_script_hash(
-        client, native_script, display_format, derivation_type=derivation_type
+        session, native_script, display_format, derivation_type=derivation_type
+    )
+
+
+@cli.command()
+@click.argument("file", type=click.File("r"))
+@click.option(
+    "-D",
+    "--derivation-type",
+    type=ChoiceType({m.name: m for m in messages.CardanoDerivationType}),
+    default=messages.CardanoDerivationType.ICARUS,
+)
+@with_session(cardano=True)
+def sign_message(
+    session: "Session",
+    file: TextIO,
+    derivation_type: messages.CardanoDerivationType,
+) -> messages.CardanoMessageSignature:
+    """Sign Cardano message containing arbitrary data."""
+    request: dict[Any, Any] = json.load(file)
+
+    return cardano.sign_message(
+        session,
+        payload=bytes.fromhex(request["payload"]),
+        prefer_hex_display=request["prefer_hex_display"],
+        signing_path=tools.parse_path(request["signing_path"]),
+        address_parameters=cardano.parse_optional_address_parameters(
+            request.get("address_parameters")
+        ),
+        protocol_magic=request.get("protocol_magic"),
+        network_id=request.get("network_id"),
+        derivation_type=derivation_type,
     )

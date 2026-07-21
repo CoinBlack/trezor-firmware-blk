@@ -15,9 +15,12 @@ pub mod obj;
 pub mod print;
 pub mod qstr;
 pub mod runtime;
-pub mod time;
+pub mod simple_type;
 pub mod typ;
 pub mod util;
+
+#[cfg(feature = "debug")]
+pub mod logging;
 
 #[cfg(test)]
 pub mod testutil;

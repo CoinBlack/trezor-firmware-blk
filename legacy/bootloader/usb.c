@@ -129,10 +129,15 @@ static void check_and_write_chunk(void) {
 }
 
 // read protobuf integer and advance pointer
-static secbool readprotobufint(const uint8_t **ptr, uint32_t *result) {
+static secbool readprotobufint(const uint8_t **ptr, const uint8_t *end,
+                               uint32_t *result) {
   *result = 0;
 
   for (int i = 0; i <= 3; ++i) {
+    if (*ptr == end) {
+      *result = 0;
+      return secfalse;
+    }
     *result += (**ptr & 0x7F) << (7 * i);
     if ((**ptr & 0x80) == 0) {
       (*ptr)++;
@@ -141,13 +146,14 @@ static secbool readprotobufint(const uint8_t **ptr, uint32_t *result) {
     (*ptr)++;
   }
 
+  if (*ptr == end) {
+    *result = 0;
+    return secfalse;
+  }
+
   if (**ptr & 0xF0) {
     // result does not fit into uint32_t
     *result = 0;
-
-    // skip over the rest of the integer
-    while (**ptr & 0x80) (*ptr)++;
-    (*ptr)++;
     return secfalse;
   }
 
@@ -185,13 +191,10 @@ static int should_keep_storage(int old_was_signed,
   if (SIG_OK != old_was_signed) return SIG_FAIL;
 
   const image_header *new_hdr = (const image_header *)FW_HEADER;
-  // if the new header is unsigned, erase storage
-  if (SIG_OK != signatures_new_ok(new_hdr, NULL)) return SIG_FAIL;
+  // new header must be signed by v3 signmessage/verifymessage scheme
+  if (SIG_OK != signatures_ok(new_hdr, NULL, sectrue)) return SIG_FAIL;
   // if the new header hashes don't match flash contents, erase storage
   if (SIG_OK != check_firmware_hashes(new_hdr)) return SIG_FAIL;
-
-  // going from old-style header to new-style is always an upgrade, keep storage
-  if (firmware_present_old()) return SIG_OK;
 
   // if the current fix_version is higher than the new one, erase storage
   if (version_compare(new_hdr->version, fix_version_current) < 0) {
@@ -279,12 +282,10 @@ static void rx_callback(usbd_device *dev, uint8_t ep) {
         if (firmware_present_new()) {
           const image_header *hdr =
               (const image_header *)FLASH_PTR(FLASH_FWHEADER_START);
+          // previous firmware was signed either v2 or v3 scheme
           old_was_signed =
-              signatures_new_ok(hdr, NULL) & check_firmware_hashes(hdr);
+              signatures_match(hdr, NULL) & check_firmware_hashes(hdr);
           fix_version_current = hdr->fix_version;
-        } else if (firmware_present_old()) {
-          old_was_signed = signatures_old_ok();
-          fix_version_current = 0;
         } else {
           old_was_signed = SIG_FAIL;
           fix_version_current = 0xffffffff;
@@ -313,8 +314,9 @@ static void rx_callback(usbd_device *dev, uint8_t ep) {
       }
       // read payload length
       const uint8_t *p = buf + 10;
-      if (readprotobufint(&p, &flash_len) != sectrue) {  // integer too large
-        send_msg_failure(dev, 9);                        // Failure_ProcessError
+      if (readprotobufint(&p, buf + sizeof(buf), &flash_len) != sectrue) {
+        // integer too large
+        send_msg_failure(dev, 9);  // Failure_ProcessError
         flash_state = STATE_END;
         show_halt("Firmware is", "too big.");
         return;
@@ -405,7 +407,8 @@ static void rx_callback(usbd_device *dev, uint8_t ep) {
       }
       flash_state = STATE_CHECK;
       const image_header *hdr = (const image_header *)FW_HEADER;
-      if (SIG_OK != signatures_new_ok(hdr, NULL)) {
+      // allow only v3 signmessage/verifymessage signature for new FW
+      if (SIG_OK != signatures_ok(hdr, NULL, sectrue)) {
         send_msg_buttonrequest_firmwarecheck(dev);
         return;
       }
@@ -416,11 +419,20 @@ static void rx_callback(usbd_device *dev, uint8_t ep) {
 
   if (flash_state == STATE_CHECK) {
     // use the firmware header from RAM
-    const image_header *hdr = (const image_header *)FW_HEADER;
+    image_header *hdr = (image_header *)FW_HEADER;
 
     bool hash_check_ok;
     // show fingerprint of unsigned firmware
-    if (SIG_OK != signatures_new_ok(hdr, NULL)) {
+    // allow only v3 signmessage/verifymessage signatures
+    if (SIG_OK != signatures_ok(hdr, NULL, sectrue)) {
+      // clear invalid signatures
+      hdr->sigindex1 = 0;
+      hdr->sigindex2 = 0;
+      hdr->sigindex3 = 0;
+      memset(hdr->sig1, 0, sizeof(hdr->sig1));
+      memset(hdr->sig2, 0, sizeof(hdr->sig2));
+      memset(hdr->sig3, 0, sizeof(hdr->sig3));
+
       if (msg_id != 0x001B) {  // ButtonAck message (id 27)
         return;
       }

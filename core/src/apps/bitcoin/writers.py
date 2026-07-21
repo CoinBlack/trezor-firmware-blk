@@ -1,11 +1,11 @@
 from micropython import const
 from typing import TYPE_CHECKING
 
-from trezor.crypto.hashlib import sha256
 from trezor.utils import ensure
 
 from apps.common.writers import (  # noqa: F401
     write_bytes_fixed,
+    write_bytes_prefixed,
     write_bytes_reversed,
     write_bytes_unchecked,
     write_compact_size,
@@ -15,13 +15,12 @@ from apps.common.writers import (  # noqa: F401
     write_uint64_le,
 )
 
+from .multisig import multisig_fingerprint
+
 if TYPE_CHECKING:
-    from trezor.messages import (
-        PrevInput,
-        PrevOutput,
-        TxInput,
-        TxOutput,
-    )
+    from buffer_types import AnyBytes
+
+    from trezor.messages import PrevInput, PrevOutput, TxInput, TxOutput
     from trezor.utils import HashWriter
 
     from apps.common.writers import Writer
@@ -33,12 +32,7 @@ write_uint64 = write_uint64_le
 TX_HASH_SIZE = const(32)
 
 
-def write_bytes_prefixed(w: Writer, b: bytes) -> None:
-    write_compact_size(w, len(b))
-    write_bytes_unchecked(w, b)
-
-
-def write_tx_input(w: Writer, i: TxInput | PrevInput, script: bytes) -> None:
+def write_tx_input(w: Writer, i: TxInput | PrevInput, script: AnyBytes) -> None:
     write_bytes_reversed(w, i.prev_hash, TX_HASH_SIZE)
     write_uint32(w, i.prev_index)
     write_bytes_prefixed(w, script)
@@ -46,8 +40,6 @@ def write_tx_input(w: Writer, i: TxInput | PrevInput, script: bytes) -> None:
 
 
 def write_tx_input_check(w: Writer, i: TxInput) -> None:
-    from .multisig import multisig_fingerprint
-
     write_uint32(w, len(i.address_n))
     for n in i.address_n:
         write_uint32(w, n)
@@ -66,28 +58,32 @@ def write_tx_input_check(w: Writer, i: TxInput) -> None:
     write_bytes_prefixed(w, i.script_pubkey or b"")
 
 
-def write_tx_output(w: Writer, o: TxOutput | PrevOutput, script_pubkey: bytes) -> None:
+def write_tx_output(
+    w: Writer, o: TxOutput | PrevOutput, script_pubkey: AnyBytes
+) -> None:
     write_uint64(w, o.amount)
     write_bytes_prefixed(w, script_pubkey)
 
 
 def write_op_push(w: Writer, n: int) -> None:
+    append = w.append  # local_cache_attribute
+
     ensure(0 <= n <= 0xFFFF_FFFF)
     if n < 0x4C:
-        w.append(n & 0xFF)
+        append(n & 0xFF)
     elif n < 0x100:
-        w.append(0x4C)
-        w.append(n & 0xFF)
+        append(0x4C)
+        append(n & 0xFF)
     elif n < 0x1_0000:
-        w.append(0x4D)
-        w.append(n & 0xFF)
-        w.append((n >> 8) & 0xFF)
+        append(0x4D)
+        append(n & 0xFF)
+        append((n >> 8) & 0xFF)
     else:
-        w.append(0x4E)
-        w.append(n & 0xFF)
-        w.append((n >> 8) & 0xFF)
-        w.append((n >> 16) & 0xFF)
-        w.append((n >> 24) & 0xFF)
+        append(0x4E)
+        append(n & 0xFF)
+        append((n >> 8) & 0xFF)
+        append((n >> 16) & 0xFF)
+        append((n >> 24) & 0xFF)
 
 
 def op_push_length(n: int) -> int:
@@ -103,6 +99,8 @@ def op_push_length(n: int) -> int:
 
 
 def get_tx_hash(w: HashWriter, double: bool = False, reverse: bool = False) -> bytes:
+    from trezor.crypto.hashlib import sha256
+
     d = w.get_digest()
     if double:
         d = sha256(d).digest()

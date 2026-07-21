@@ -27,7 +27,6 @@ Issue Date: 02/08/2018
 #include <stdlib.h>
 #include <stdint.h>
 
-#define VOID_RETURN         void
 #define INT_RETURN          int
 #define ALIGN_OFFSET(x,n)   (((intptr_t)(x)) & ((n) - 1))
 #define ALIGN_FLOOR(x,n)    ((uint8_t*)(x) - ( ((intptr_t)(x)) & ((n) - 1)))
@@ -90,6 +89,8 @@ typedef union
 #if defined(_MSC_VER) && defined(_WIN64)
 #define ALIGNED_(x) __declspec(align(x))
 #elif defined(__GNUC__) && defined(__x86_64__)
+#define ALIGNED_(x) __attribute__ ((aligned(x)))
+#elif defined(__clang__) && defined(__x86_64__)
 #define ALIGNED_(x) __attribute__ ((aligned(x)))
 #else
 #define ALIGNED_(x)

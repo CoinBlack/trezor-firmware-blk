@@ -1,9 +1,13 @@
-from common import *
+# flake8: noqa: F403,F405
+from common import *  # isort:skip
 
 from trezor import io, sdcard
 
-fatfs = io.fatfs
+if utils.USE_SD_CARD:
+    fatfs = io.fatfs
 
+
+@unittest.skipUnless(utils.USE_SD_CARD, "requires SD card")
 class TestTrezorSdcard(unittest.TestCase):
     def test_power(self):
         # sdcard.capacity() will return 0 if the card is not powered,

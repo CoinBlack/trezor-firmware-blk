@@ -1,35 +1,43 @@
 from typing import TYPE_CHECKING
 
-from trezor.messages import NEMAggregateModification, NEMSignTx, NEMTransactionCommon
-
 from . import layout, serialize
 
 if TYPE_CHECKING:
-    from trezor.wire import Context
+    from buffer_types import AnyBytes
+
+    from trezor.messages import (
+        NEMAggregateModification,
+        NEMSignTx,
+        NEMTransactionCommon,
+    )
 
 
-async def ask(ctx: Context, msg: NEMSignTx) -> None:
-    await layout.ask_multisig(ctx, msg)
+async def ask(msg: NEMSignTx) -> None:
+    await layout.ask_multisig(msg)
 
 
-def initiate(public_key: bytes, common: NEMTransactionCommon, inner_tx: bytes) -> bytes:
+def initiate(
+    public_key: AnyBytes, common: NEMTransactionCommon, inner_tx: AnyBytes
+) -> bytearray:
     return serialize.serialize_multisig(common, public_key, inner_tx)
 
 
 def cosign(
-    public_key: bytes, common: NEMTransactionCommon, inner_tx: bytes, signer: bytes
-) -> bytes:
+    public_key: AnyBytes,
+    common: NEMTransactionCommon,
+    inner_tx: AnyBytes,
+    signer: AnyBytes,
+) -> bytearray:
     return serialize.serialize_multisig_signature(common, public_key, inner_tx, signer)
 
 
 async def aggregate_modification(
-    ctx: Context,
-    public_key: bytes,
+    public_key: AnyBytes,
     common: NEMTransactionCommon,
     aggr: NEMAggregateModification,
     multisig: bool,
-) -> bytes:
-    await layout.ask_aggregate_modification(ctx, common, aggr, multisig)
+) -> bytearray:
+    await layout.ask_aggregate_modification(common, aggr, multisig)
     w = serialize.serialize_aggregate_modification(common, aggr, public_key)
 
     for m in aggr.modifications:

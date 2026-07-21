@@ -17,15 +17,18 @@
 import pytest
 
 from trezorlib import device, exceptions, messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib.debuglink import DebugSession as Session
 
-from ...common import (
-    MNEMONIC_SLIP39_ADVANCED_20,
-    MNEMONIC_SLIP39_ADVANCED_33,
-    recovery_enter_shares,
+from ...common import MNEMONIC_SLIP39_ADVANCED_20, MNEMONIC_SLIP39_ADVANCED_33
+from ...input_flows import (
+    InputFlowSlip39AdvancedRecovery,
+    InputFlowSlip39AdvancedRecoveryAbort,
+    InputFlowSlip39AdvancedRecoveryNoAbort,
+    InputFlowSlip39AdvancedRecoveryShareAlreadyEntered,
+    InputFlowSlip39AdvancedRecoveryThresholdReached,
 )
 
-pytestmark = pytest.mark.skip_t1
+pytestmark = [pytest.mark.models("core"), pytest.mark.setup_client(uninitialized=True)]
 
 EXTRA_GROUP_SHARE = [
     "eraser senior decision smug corner ruin rescue cubic angel tackle skin skunk program roster trash rumor slush angel flea amazing"
@@ -42,171 +45,92 @@ VECTORS = (
 
 
 # To allow reusing functionality for multiple tests
-def _test_secret(client: Client, shares, secret, click_info=False):
-    debug = client.debug
-
-    def input_flow():
-        yield  # Confirm Recovery
-        debug.press_yes()
-        # Proceed with recovery
-        yield from recovery_enter_shares(
-            debug, shares, groups=True, click_info=click_info
+def _test_secret(
+    session: Session, shares: list[str], secret: str, click_info: bool = False
+):
+    with session.test_ctx as client:
+        IF = InputFlowSlip39AdvancedRecovery(session, shares, click_info=click_info)
+        client.set_input_flow(IF.get())
+        device.recover(
+            session,
+            pin_protection=False,
+            passphrase_protection=False,
+            label="label",
         )
 
-    with client:
-        client.set_input_flow(input_flow)
-        ret = device.recover(
-            client, pin_protection=False, passphrase_protection=False, label="label"
-        )
-
-    # Workflow succesfully ended
-    assert ret == messages.Success(message="Device recovered")
-    assert client.features.initialized is True
-    assert client.features.pin_protection is False
-    assert client.features.passphrase_protection is False
-    assert client.features.backup_type is messages.BackupType.Slip39_Advanced
-    assert debug.state().mnemonic_secret.hex() == secret
+    assert session.features.initialized is True
+    assert session.features.pin_protection is False
+    assert session.features.passphrase_protection is False
+    assert session.features.backup_type is messages.BackupType.Slip39_Advanced
+    assert session.debug.state().mnemonic_secret.hex() == secret
 
 
 @pytest.mark.parametrize("shares, secret", VECTORS)
-@pytest.mark.setup_client(uninitialized=True)
-def test_secret(client: Client, shares, secret):
-    _test_secret(client, shares, secret)
+def test_secret(session: Session, shares: list[str], secret: str):
+    _test_secret(session, shares, secret)
 
 
 @pytest.mark.parametrize("shares, secret", VECTORS)
-@pytest.mark.setup_client(uninitialized=True)
-def test_secret_click_info_button(client: Client, shares, secret):
-    _test_secret(client, shares, secret, click_info=True)
+@pytest.mark.models(skip="safe3", reason="safe3 does not have info button")
+def test_secret_click_info_button(session: Session, shares: list[str], secret: str):
+    _test_secret(session, shares, secret, click_info=True)
 
 
-@pytest.mark.setup_client(uninitialized=True)
-def test_extra_share_entered(client: Client):
+def test_extra_share_entered(session: Session):
     _test_secret(
-        client,
+        session,
         shares=EXTRA_GROUP_SHARE + MNEMONIC_SLIP39_ADVANCED_20,
         secret=VECTORS[0][1],
     )
 
 
-@pytest.mark.setup_client(uninitialized=True)
-def test_abort(client: Client):
-    debug = client.debug
-
-    def input_flow():
-        yield  # Confirm Recovery
-        debug.press_yes()
-        yield  # Homescreen - abort process
-        debug.press_no()
-        yield  # Homescreen - confirm abort
-        debug.press_yes()
-
-    with client:
-        client.set_input_flow(input_flow)
+def test_abort(session: Session):
+    with session.test_ctx as client:
+        IF = InputFlowSlip39AdvancedRecoveryAbort(session)
+        client.set_input_flow(IF.get())
         with pytest.raises(exceptions.Cancelled):
-            device.recover(client, pin_protection=False, label="label")
-        client.init_device()
-        assert client.features.initialized is False
+            device.recover(session, pin_protection=False, label="label")
+        session.refresh_features()
+        assert session.features.initialized is False
 
 
-@pytest.mark.setup_client(uninitialized=True)
-def test_noabort(client: Client):
-    debug = client.debug
-
-    def input_flow():
-        yield  # Confirm Recovery
-        debug.press_yes()
-        yield  # Homescreen - abort process
-        debug.press_no()
-        yield  # Homescreen - go back to process
-        debug.press_no()
-        yield from recovery_enter_shares(
-            debug, EXTRA_GROUP_SHARE + MNEMONIC_SLIP39_ADVANCED_20, groups=True
+def test_noabort(session: Session):
+    with session.test_ctx as client:
+        IF = InputFlowSlip39AdvancedRecoveryNoAbort(
+            session, EXTRA_GROUP_SHARE + MNEMONIC_SLIP39_ADVANCED_20
         )
-
-    with client:
-        client.set_input_flow(input_flow)
-        device.recover(client, pin_protection=False, label="label")
-        client.init_device()
-        assert client.features.initialized is True
+        client.set_input_flow(IF.get())
+        device.recover(session, pin_protection=False, label="label")
+        session.refresh_features()
+        assert session.features.initialized is True
 
 
-@pytest.mark.setup_client(uninitialized=True)
-def test_same_share(client: Client):
-    debug = client.debug
+def test_same_share(session: Session):
     # we choose the second share from the fixture because
     # the 1st is 1of1 and group threshold condition is reached first
     first_share = MNEMONIC_SLIP39_ADVANCED_20[1].split(" ")
     # second share is first 4 words of first
     second_share = MNEMONIC_SLIP39_ADVANCED_20[1].split(" ")[:4]
 
-    def input_flow():
-        yield  # Confirm Recovery
-        debug.press_yes()
-        yield  # Homescreen - start process
-        debug.press_yes()
-        yield  # Enter number of words
-        debug.input(str(len(first_share)))
-        yield  # Homescreen - proceed to share entry
-        debug.press_yes()
-        yield  # Enter first share
-        for word in first_share:
-            debug.input(word)
-
-        yield  # Continue to next share
-        debug.press_yes()
-        yield  # Homescreen - next share
-        debug.press_yes()
-        yield  # Enter next share
-        for word in second_share:
-            debug.input(word)
-
-        br = yield
-        assert br.code == messages.ButtonRequestType.Warning
-
-        client.cancel()
-
-    with client:
-        client.set_input_flow(input_flow)
+    with session.test_ctx as client:
+        IF = InputFlowSlip39AdvancedRecoveryShareAlreadyEntered(
+            session, first_share, second_share
+        )
+        client.set_input_flow(IF.get())
         with pytest.raises(exceptions.Cancelled):
-            device.recover(client, pin_protection=False, label="label")
+            device.recover(session, pin_protection=False, label="label")
 
 
-@pytest.mark.setup_client(uninitialized=True)
-def test_group_threshold_reached(client: Client):
-    debug = client.debug
+def test_group_threshold_reached(session: Session):
     # first share in the fixture is 1of1 so we choose that
     first_share = MNEMONIC_SLIP39_ADVANCED_20[0].split(" ")
     # second share is first 3 words of first
     second_share = MNEMONIC_SLIP39_ADVANCED_20[0].split(" ")[:3]
 
-    def input_flow():
-        yield  # Confirm Recovery
-        debug.press_yes()
-        yield  # Homescreen - start process
-        debug.press_yes()
-        yield  # Enter number of words
-        debug.input(str(len(first_share)))
-        yield  # Homescreen - proceed to share entry
-        debug.press_yes()
-        yield  # Enter first share
-        for word in first_share:
-            debug.input(word)
-
-        yield  # Continue to next share
-        debug.press_yes()
-        yield  # Homescreen - next share
-        debug.press_yes()
-        yield  # Enter next share
-        for word in second_share:
-            debug.input(word)
-
-        br = yield
-        assert br.code == messages.ButtonRequestType.Warning
-
-        client.cancel()
-
-    with client:
-        client.set_input_flow(input_flow)
+    with session.test_ctx as client:
+        IF = InputFlowSlip39AdvancedRecoveryThresholdReached(
+            session, first_share, second_share
+        )
+        client.set_input_flow(IF.get())
         with pytest.raises(exceptions.Cancelled):
-            device.recover(client, pin_protection=False, label="label")
+            device.recover(session, pin_protection=False, label="label")

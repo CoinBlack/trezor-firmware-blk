@@ -34,10 +34,14 @@
 #include "timer.h"
 #include "usb.h"
 #include "util.h"
+
 #if !EMULATOR
 #include <libopencm3/stm32/desig.h>
 #include "otp.h"
+#else
+#include <stdio.h>
 #endif
+
 #ifdef USE_SECP256K1_ZKP
 #include "zkp_context.h"
 #endif
@@ -45,19 +49,23 @@
 #ifdef USE_SECP256K1_ZKP
 void secp256k1_default_illegal_callback_fn(const char *str, void *data) {
   (void)data;
-  __fatal_error(NULL, str, __FILE__, __LINE__, __func__);
+  __fatal_error(str, __FILE__, __LINE__);
   return;
 }
 
 void secp256k1_default_error_callback_fn(const char *str, void *data) {
   (void)data;
-  __fatal_error(NULL, str, __FILE__, __LINE__, __func__);
+  __fatal_error(str, __FILE__, __LINE__);
   return;
 }
 #endif
 
 /* Screen timeout */
 uint32_t system_millis_lock_start = 0;
+
+/* Busyscreen timeout */
+static uint32_t system_millis_busy_start = 0;
+static uint32_t system_millis_busy_length = 0;
 
 void check_lock_screen(void) {
   buttonUpdate();
@@ -69,7 +77,8 @@ void check_lock_screen(void) {
   }
 
   // button held for long enough (5 seconds)
-  if (layoutLast == layoutHome && button.NoDown >= 114000 * 5) {
+  if ((layoutLast == layoutHomescreen || layoutLast == layoutBusyscreen) &&
+      button.NoDown >= 114000 * 5) {
     layoutDialog(&bmp_icon_question, _("Cancel"), _("Lock Device"), NULL,
                  _("Do you really want to"), _("lock your Trezor?"), NULL, NULL,
                  NULL, NULL);
@@ -99,13 +108,30 @@ void check_lock_screen(void) {
   }
 
   // if homescreen is shown for too long
-  if (layoutLast == layoutHome) {
+  if (layoutLast == layoutHomescreen) {
     if ((timer_ms() - system_millis_lock_start) >=
         config_getAutoLockDelayMs()) {
       // lock the screen
       config_lockDevice();
       layoutScreensaver();
     }
+  }
+}
+
+void trezor_set_busy(uint32_t length_ms) {
+  system_millis_busy_start = timer_ms();
+  system_millis_busy_length = length_ms;
+}
+
+bool trezor_is_busy(void) {
+  return timer_ms() - system_millis_busy_start < system_millis_busy_length;
+}
+
+void check_busy_screen(void) {
+  // Clear the busy screen once it expires.
+  if (system_millis_busy_length != 0 && !trezor_is_busy()) {
+    system_millis_busy_length = 0;
+    layoutHome();
   }
 }
 
@@ -170,6 +196,13 @@ int main(void) {
 #endif
 #endif
 
+#if EMULATOR
+  printf(
+      "\x1b[1;31m"
+      "*** TREZOR EMULATOR IS FOR DEVELOPMENT PURPOSES ONLY ***"
+      "\x1b[0m\n");
+#endif
+
   oledDrawBitmap(40, 0, &bmp_logo64_half);
   oledDrawBitmapFlip(40 + 24, 0, &bmp_logo64_half);
   oledRefresh();
@@ -184,6 +217,7 @@ int main(void) {
     usbPoll();
 #endif
     check_lock_screen();
+    check_busy_screen();
   }
 
   return 0;

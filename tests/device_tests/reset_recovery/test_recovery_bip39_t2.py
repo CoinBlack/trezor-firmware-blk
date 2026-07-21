@@ -17,115 +17,56 @@
 import pytest
 
 from trezorlib import device, exceptions, messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib.debuglink import DebugSession as Session
 
 from ...common import MNEMONIC12
+from ...input_flows import InputFlowBip39Recovery
 
-pytestmark = pytest.mark.skip_t1
-
-
-@pytest.mark.setup_client(uninitialized=True)
-def test_tt_pin_passphrase(client: Client):
-    layout = client.debug.wait_layout
-    mnemonic = MNEMONIC12.split(" ")
-
-    def input_flow():
-        yield
-        assert "Do you really want to recover a wallet?" in layout().text
-        client.debug.press_yes()
-
-        yield
-        assert layout().text == "PinDialog"
-        client.debug.input("654")
-
-        yield
-        assert layout().text == "PinDialog"
-        client.debug.input("654")
-
-        yield
-        assert "Select number of words" in layout().text
-        client.debug.press_yes()
-
-        yield
-        assert "WordSelector" in layout().text
-        client.debug.input(str(len(mnemonic)))
-
-        yield
-        assert "Enter recovery seed" in layout().text
-        client.debug.press_yes()
-
-        yield
-        for word in mnemonic:
-            assert layout().text == "Bip39Keyboard"
-            client.debug.input(word)
-
-        yield
-        assert "You have successfully recovered your wallet." in layout().text
-        client.debug.press_yes()
-
-    with client:
-        client.set_input_flow(input_flow)
-        client.watch_layout()
-        device.recover(
-            client, pin_protection=True, passphrase_protection=True, label="hello"
-        )
-
-    assert client.debug.state().mnemonic_secret.decode() == MNEMONIC12
-
-    assert client.features.pin_protection is True
-    assert client.features.passphrase_protection is True
-    assert client.features.backup_type is messages.BackupType.Bip39
-    assert client.features.label == "hello"
+pytestmark = pytest.mark.models("core")
 
 
 @pytest.mark.setup_client(uninitialized=True)
-def test_tt_nopin_nopassphrase(client: Client):
-    layout = client.debug.wait_layout
-    mnemonic = MNEMONIC12.split(" ")
-
-    def input_flow():
-        yield
-        assert "Do you really want to recover a wallet?" in layout().text
-        client.debug.press_yes()
-
-        yield
-        assert "Select number of words" in layout().text
-        client.debug.press_yes()
-
-        yield
-        assert "WordSelector" in layout().text
-        client.debug.input(str(len(mnemonic)))
-
-        yield
-        assert "Enter recovery seed" in layout().text
-        client.debug.press_yes()
-
-        yield
-        for word in mnemonic:
-            assert layout().text == "Bip39Keyboard"
-            client.debug.input(word)
-
-        yield
-        assert "You have successfully recovered your wallet." in layout().text
-        client.debug.press_yes()
-
-    with client:
-        client.set_input_flow(input_flow)
-        client.watch_layout()
+def test_tt_pin_passphrase(session: Session):
+    with session.test_ctx as client:
+        IF = InputFlowBip39Recovery(session, MNEMONIC12.split(" "), pin="654")
+        client.set_input_flow(IF.get())
         device.recover(
-            client, pin_protection=False, passphrase_protection=False, label="hello"
+            session,
+            pin_protection=True,
+            passphrase_protection=True,
+            label="hello",
         )
 
-    assert client.debug.state().mnemonic_secret.decode() == MNEMONIC12
-    assert client.features.pin_protection is False
-    assert client.features.passphrase_protection is False
-    assert client.features.backup_type is messages.BackupType.Bip39
-    assert client.features.label == "hello"
+    assert session.debug.state().mnemonic_secret.decode() == MNEMONIC12
+
+    assert session.features.pin_protection is True
+    assert session.features.passphrase_protection is True
+    assert session.features.backup_type is messages.BackupType.Bip39
+    assert session.features.label == "hello"
 
 
-def test_already_initialized(client: Client):
+@pytest.mark.setup_client(uninitialized=True)
+def test_tt_nopin_nopassphrase(session: Session):
+    with session.test_ctx as client:
+        IF = InputFlowBip39Recovery(session, MNEMONIC12.split(" "))
+        client.set_input_flow(IF.get())
+        device.recover(
+            session,
+            pin_protection=False,
+            passphrase_protection=False,
+            label="hello",
+        )
+
+    assert session.debug.state().mnemonic_secret.decode() == MNEMONIC12
+    assert session.features.pin_protection is False
+    assert session.features.passphrase_protection is False
+    assert session.features.backup_type is messages.BackupType.Bip39
+    assert session.features.label == "hello"
+
+
+def test_already_initialized(session: Session):
     with pytest.raises(RuntimeError):
-        device.recover(client)
+        device.recover(session)
 
     with pytest.raises(exceptions.TrezorFailure, match="Already initialized"):
-        client.call(messages.RecoveryDevice())
+        session.call(messages.RecoveryDevice())

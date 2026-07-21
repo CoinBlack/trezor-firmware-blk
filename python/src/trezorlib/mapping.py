@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -14,26 +14,31 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
+from __future__ import annotations
+
 import io
+import typing as t
 from types import ModuleType
-from typing import Dict, Optional, Tuple, Type, TypeVar
+
+from typing_extensions import Self
 
 from . import messages, protobuf
 
-T = TypeVar("T")
+T = t.TypeVar("T")
+MT = t.TypeVar("MT", bound=protobuf.MessageType)
 
 
 class ProtobufMapping:
     """Mapping of protobuf classes to Python classes"""
 
     def __init__(self) -> None:
-        self.type_to_class: Dict[int, Type[protobuf.MessageType]] = {}
-        self.class_to_type_override: Dict[Type[protobuf.MessageType], int] = {}
+        self.type_to_class: t.Dict[int, t.Type[protobuf.MessageType]] = {}
+        self.class_to_type_override: t.Dict[t.Type[protobuf.MessageType], int] = {}
 
     def register(
         self,
-        msg_class: Type[protobuf.MessageType],
-        msg_wire_type: Optional[int] = None,
+        msg_class: t.Type[protobuf.MessageType],
+        msg_wire_type: int | None = None,
     ) -> None:
         """Register a Python class as a protobuf type.
 
@@ -51,14 +56,16 @@ class ProtobufMapping:
 
         self.type_to_class[msg_wire_type] = msg_class
 
-    def encode(self, msg: protobuf.MessageType) -> Tuple[int, bytes]:
+    def encode(self, msg: protobuf.MessageType) -> tuple[int, bytes]:
         """Serialize a Python protobuf class.
 
         Returns the message wire type and a byte representation of the protobuf message.
         """
         wire_type = self.class_to_type_override.get(type(msg), msg.MESSAGE_WIRE_TYPE)
         if wire_type is None:
-            raise ValueError("Cannot encode class without wire type")
+            raise ValueError(
+                f'Cannot encode class "{type(msg).__name__}" without wire type'
+            )
 
         buf = io.BytesIO()
         protobuf.dump_message(buf, msg)
@@ -71,7 +78,7 @@ class ProtobufMapping:
         return protobuf.load_message(buf, cls)
 
     @classmethod
-    def from_module(cls: Type[T], module: ModuleType) -> T:
+    def from_module(cls, module: ModuleType) -> Self:
         """Generate a mapping from a module.
 
         The module must have a `MessageType` enum that specifies individual wire types.
@@ -79,16 +86,18 @@ class ProtobufMapping:
         mapping = cls()
 
         message_types = getattr(module, "MessageType")
-        for entry in message_types:
+        thp_message_types = getattr(module, "ThpMessageType")
+
+        for entry in (*message_types, *thp_message_types):
             msg_class = getattr(module, entry.name, None)
             if msg_class is None:
                 raise ValueError(
-                    f"Implementation of protobuf message '{entry.name}' is missing"
+                    f"Implementation of protobuf message '{entry.name}' is missing, {module}"
                 )
 
             if msg_class.MESSAGE_WIRE_TYPE != entry.value:
                 raise ValueError(
-                    f"Inconsistent wire type and MessageType record for '{entry.name}'"
+                    f"Inconsistent wire type and MessageType record for '{entry.name}': {entry.value} != {msg_class.MESSAGE_WIRE_TYPE}, {msg_class}"
                 )
 
             mapping.register(msg_class)

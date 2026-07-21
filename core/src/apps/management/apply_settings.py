@@ -1,243 +1,303 @@
 from typing import TYPE_CHECKING
 
-import storage.device
-from trezor import ui, wire
-from trezor.enums import ButtonRequestType, SafetyCheckLevel
-from trezor.messages import Success
-from trezor.strings import format_duration_ms
+import storage.device as storage_device
+import trezorui_api
+from trezor import TR, utils
+from trezor.enums import ButtonRequestType, DisplayRotation
 from trezor.ui.layouts import confirm_action
-
-from apps.base import reload_settings_from_storage
-from apps.common import safety_checks
+from trezor.wire import DataError, high_speed
 
 if TYPE_CHECKING:
-    from trezor.messages import ApplySettings
+    from buffer_types import AnyBytes
+
+    from trezor.enums import SafetyCheckLevel
+    from trezor.messages import ApplySettings, Success
+
+BRT_PROTECT_CALL = ButtonRequestType.ProtectCall  # CACHE
 
 
-def validate_homescreen(homescreen: bytes) -> None:
+async def _load_homescreen(length: int) -> bytearray:
+    from trezor import utils
+    from trezor.ui.layouts.progress import progress
+
+    from apps.common import chunked
+
+    if length <= 0:
+        return bytearray()
+    elif length > utils.HOMESCREEN_MAXSIZE:
+        raise DataError(
+            f"Homescreen is too large, maximum size is {utils.HOMESCREEN_MAXSIZE} bytes"
+        )
+
+    loader = progress()
+
+    buf = utils.empty_bytearray(length)
+    await chunked.get_all_chunks(buf, length, report=loader.report)
+    return buf
+
+
+def _validate_homescreen(homescreen: AnyBytes) -> None:
     if homescreen == b"":
         return
 
-    if len(homescreen) > storage.device.HOMESCREEN_MAXSIZE:
-        raise wire.DataError(
-            f"Homescreen is too large, maximum size is {storage.device.HOMESCREEN_MAXSIZE} bytes"
+    if len(homescreen) > utils.HOMESCREEN_MAXSIZE:
+        raise DataError(
+            f"Homescreen is too large, maximum size is {utils.HOMESCREEN_MAXSIZE} bytes"
         )
-
-    try:
-        w, h, grayscale = ui.display.toif_info(homescreen)
-    except ValueError:
-        raise wire.DataError("Invalid homescreen")
-    if w != 144 or h != 144:
-        raise wire.DataError("Homescreen must be 144x144 pixel large")
-    if grayscale:
-        raise wire.DataError("Homescreen must be full-color TOIF image")
+    if not trezorui_api.check_homescreen_format(homescreen):
+        raise DataError("Wrong homescreen format")
 
 
-async def apply_settings(ctx: wire.Context, msg: ApplySettings) -> Success:
-    if not storage.device.is_initialized():
-        raise wire.NotInitialized("Device is not initialized")
+async def apply_settings(msg: ApplySettings) -> Success:
+    from trezor.messages import Success
+    from trezor.wire import NotInitialized, ProcessError
+
+    from apps.common import safety_checks
+    from apps.common.lock_manager import reload_settings_from_storage
+
+    if not storage_device.is_initialized():
+        raise NotInitialized("Device is not initialized")
+
+    homescreen = msg.homescreen  # local_cache_attribute
+    homescreen_length = msg.homescreen_length  # local_cache_attribute
+    label = msg.label  # local_cache_attribute
+    auto_lock_delay_ms = msg.auto_lock_delay_ms  # local_cache_attribute
+    auto_lock_delay_battery_ms = msg.auto_lock_delay_battery_ms
+    use_passphrase = msg.use_passphrase  # local_cache_attribute
+    passphrase_always_on_device = (
+        msg.passphrase_always_on_device
+    )  # local_cache_attribute
+    display_rotation = msg.display_rotation  # local_cache_attribute
+    msg_safety_checks = msg.safety_checks  # local_cache_attribute
+    experimental_features = msg.experimental_features  # local_cache_attribute
+    hide_passphrase_from_host = msg.hide_passphrase_from_host  # local_cache_attribute
+    haptic_feedback = msg.haptic_feedback
+
     if (
-        msg.homescreen is None
-        and msg.label is None
-        and msg.use_passphrase is None
-        and msg.passphrase_always_on_device is None
-        and msg.display_rotation is None
-        and msg.auto_lock_delay_ms is None
-        and msg.safety_checks is None
-        and msg.experimental_features is None
+        homescreen is None
+        and homescreen_length is None
+        and label is None
+        and use_passphrase is None
+        and passphrase_always_on_device is None
+        and display_rotation is None
+        and auto_lock_delay_ms is None
+        and auto_lock_delay_battery_ms is None
+        and msg_safety_checks is None
+        and experimental_features is None
+        and hide_passphrase_from_host is None
+        and (haptic_feedback is None or not utils.USE_HAPTIC)
     ):
-        raise wire.ProcessError("No setting provided")
+        raise ProcessError("No setting provided")
 
-    if msg.homescreen is not None:
-        validate_homescreen(msg.homescreen)
-        await require_confirm_change_homescreen(ctx)
+    if homescreen_length is not None:
+        if homescreen is not None:
+            raise ProcessError("Mutually exclusive settings")
+        with high_speed:
+            homescreen = await _load_homescreen(homescreen_length)
+
+    if homescreen is not None:
+        _validate_homescreen(homescreen)
+        await _require_confirm_change_homescreen(homescreen)
         try:
-            storage.device.set_homescreen(msg.homescreen)
+            storage_device.set_homescreen(homescreen)
         except ValueError:
-            raise wire.DataError("Invalid homescreen")
+            raise DataError("Invalid homescreen")
 
-    if msg.label is not None:
-        if len(msg.label) > storage.device.LABEL_MAXLENGTH:
-            raise wire.DataError("Label too long")
-        await require_confirm_change_label(ctx, msg.label)
-        storage.device.set_label(msg.label)
+    if label is not None:
+        if len(label) > storage_device.LABEL_MAXLENGTH:
+            raise DataError("Label too long")
+        await _require_confirm_change_label(label)
+        storage_device.set_label(label)
 
-    if msg.use_passphrase is not None:
-        await require_confirm_change_passphrase(ctx, msg.use_passphrase)
-        storage.device.set_passphrase_enabled(msg.use_passphrase)
+    if use_passphrase is not None:
+        await _require_confirm_change_passphrase(use_passphrase)
+        storage_device.set_passphrase_enabled(use_passphrase)
 
-    if msg.passphrase_always_on_device is not None:
-        if not storage.device.is_passphrase_enabled():
-            raise wire.DataError("Passphrase is not enabled")
-        await require_confirm_change_passphrase_source(
-            ctx, msg.passphrase_always_on_device
-        )
-        storage.device.set_passphrase_always_on_device(msg.passphrase_always_on_device)
+    if passphrase_always_on_device is not None:
+        if not storage_device.is_passphrase_enabled():
+            raise DataError("Passphrase is not enabled")
+        await _require_confirm_change_passphrase_source(passphrase_always_on_device)
+        storage_device.set_passphrase_always_on_device(passphrase_always_on_device)
 
-    if msg.auto_lock_delay_ms is not None:
-        if msg.auto_lock_delay_ms < storage.device.AUTOLOCK_DELAY_MINIMUM:
-            raise wire.ProcessError("Auto-lock delay too short")
-        if msg.auto_lock_delay_ms > storage.device.AUTOLOCK_DELAY_MAXIMUM:
-            raise wire.ProcessError("Auto-lock delay too long")
-        await require_confirm_change_autolock_delay(ctx, msg.auto_lock_delay_ms)
-        storage.device.set_autolock_delay_ms(msg.auto_lock_delay_ms)
+    if auto_lock_delay_ms is not None:
+        if auto_lock_delay_ms < storage_device.AUTOLOCK_DELAY_USB_MIN_MS:
+            raise ProcessError("Auto-lock delay too short")
+        if auto_lock_delay_ms > storage_device.AUTOLOCK_DELAY_USB_MAX_MS:
+            raise ProcessError("Auto-lock delay too long")
+        await _require_confirm_change_autolock_delay(auto_lock_delay_ms)
+        storage_device.set_autolock_delay_ms(auto_lock_delay_ms)
 
-    if msg.safety_checks is not None:
-        await require_confirm_safety_checks(ctx, msg.safety_checks)
-        safety_checks.apply_setting(msg.safety_checks)
+    if auto_lock_delay_battery_ms is not None and utils.USE_POWER_MANAGER:
+        if auto_lock_delay_battery_ms < storage_device.AUTOLOCK_DELAY_BATT_MIN_MS:
+            raise ProcessError("Auto-lock delay too short")
+        if auto_lock_delay_battery_ms > storage_device.AUTOLOCK_DELAY_BATT_MAX_MS:
+            raise ProcessError("Auto-lock delay too long")
+        await _require_confirm_change_autolock_delay(auto_lock_delay_battery_ms)
+        storage_device.set_autolock_delay_battery_ms(auto_lock_delay_battery_ms)
 
-    if msg.display_rotation is not None:
-        await require_confirm_change_display_rotation(ctx, msg.display_rotation)
-        storage.device.set_rotation(msg.display_rotation)
+    if msg_safety_checks is not None:
+        await _require_confirm_safety_checks(msg_safety_checks)
+        safety_checks.apply_setting(msg_safety_checks)
 
-    if msg.experimental_features is not None:
-        await require_confirm_experimental_features(ctx, msg.experimental_features)
-        storage.device.set_experimental_features(msg.experimental_features)
+    if display_rotation is not None:
+        await _require_confirm_change_display_rotation(display_rotation)
+        storage_device.set_rotation(display_rotation)
+
+    if experimental_features is not None:
+        await _require_confirm_experimental_features(experimental_features)
+        storage_device.set_experimental_features(experimental_features)
+
+    if hide_passphrase_from_host is not None:
+        if safety_checks.is_strict():
+            raise ProcessError("Safety checks are strict")
+        await _require_confirm_hide_passphrase_from_host(hide_passphrase_from_host)
+        storage_device.set_hide_passphrase_from_host(hide_passphrase_from_host)
+
+    if haptic_feedback is not None and utils.USE_HAPTIC:
+        from trezor import io
+
+        await _require_confirm_haptic_feedback(haptic_feedback)
+        io.haptic.haptic_set_enabled(haptic_feedback)
+        storage_device.set_haptic_feedback(haptic_feedback)
 
     reload_settings_from_storage()
+
+    utils.notify_send(utils.NOTIFY_SETTING_CHANGE)
 
     return Success(message="Settings applied")
 
 
-async def require_confirm_change_homescreen(ctx: wire.GenericContext) -> None:
-    await confirm_action(
-        ctx,
-        "set_homescreen",
-        "Set homescreen",
-        description="Do you really want to change the homescreen image?",
-        br_code=ButtonRequestType.ProtectCall,
+async def _require_confirm_change_homescreen(homescreen: AnyBytes) -> None:
+    from trezor.ui.layouts import confirm_homescreen
+
+    await confirm_homescreen(homescreen)
+
+
+async def _require_confirm_change_label(label: str) -> None:
+    from trezor.ui.layouts import confirm_change_label
+
+    await confirm_change_label(
+        "set_label", TR.device_name__title, TR.device_name__change_template, label
     )
 
 
-async def require_confirm_change_label(ctx: wire.GenericContext, label: str) -> None:
-    await confirm_action(
-        ctx,
-        "set_label",
-        "Change label",
-        description="Do you really want to change the label to {}?",
-        description_param=label,
-        br_code=ButtonRequestType.ProtectCall,
-    )
+async def _require_confirm_change_passphrase(use: bool) -> None:
+    from trezor.ui.layouts import confirm_change_passphrase
+
+    await confirm_change_passphrase(use)
 
 
-async def require_confirm_change_passphrase(
-    ctx: wire.GenericContext, use: bool
+async def _require_confirm_hide_passphrase_from_host(enable: bool) -> None:
+    from trezor.ui.layouts import confirm_hide_passphrase_from_host
+
+    if enable:
+        await confirm_hide_passphrase_from_host()
+
+
+async def _require_confirm_change_passphrase_source(
+    passphrase_always_on_device: bool,
 ) -> None:
-    if use:
-        description = "Do you really want to enable passphrase encryption?"
+    from trezor.ui.layouts import confirm_change_passphrase_source
+
+    await confirm_change_passphrase_source(passphrase_always_on_device)
+
+
+async def _require_confirm_change_display_rotation(rotation: DisplayRotation) -> None:
+    if rotation == DisplayRotation.North:
+        label = TR.rotation__north
+    elif rotation == DisplayRotation.East:
+        label = TR.rotation__east
+    elif rotation == DisplayRotation.South:
+        label = TR.rotation__south
+    elif rotation == DisplayRotation.West:
+        label = TR.rotation__west
     else:
-        description = "Do you really want to disable passphrase encryption?"
+        raise RuntimeError  # Unsupported display rotation
+
     await confirm_action(
-        ctx,
-        "set_passphrase",
-        "Enable passphrase" if use else "Disable passphrase",
-        description=description,
-        br_code=ButtonRequestType.ProtectCall,
-    )
-
-
-async def require_confirm_change_passphrase_source(
-    ctx: wire.GenericContext, passphrase_always_on_device: bool
-) -> None:
-    if passphrase_always_on_device:
-        description = "Do you really want to enter passphrase always on the device?"
-    else:
-        description = "Do you want to revoke the passphrase on device setting?"
-    await confirm_action(
-        ctx,
-        "set_passphrase_source",
-        "Passphrase source",
-        description=description,
-        br_code=ButtonRequestType.ProtectCall,
-    )
-
-
-async def require_confirm_change_display_rotation(
-    ctx: wire.GenericContext, rotation: int
-) -> None:
-    if rotation == 0:
-        label = "north"
-    elif rotation == 90:
-        label = "east"
-    elif rotation == 180:
-        label = "south"
-    elif rotation == 270:
-        label = "west"
-    else:
-        raise wire.DataError("Unsupported display rotation")
-    await confirm_action(
-        ctx,
         "set_rotation",
-        "Change rotation",
-        description="Do you really want to change display rotation to {}?",
+        TR.rotation__title_change,
+        subtitle=TR.words__settings,
+        description=TR.rotation__change_template,
         description_param=label,
-        br_code=ButtonRequestType.ProtectCall,
+        br_code=BRT_PROTECT_CALL,
+        prompt_screen=True,
     )
 
 
-async def require_confirm_change_autolock_delay(
-    ctx: wire.GenericContext, delay_ms: int
-) -> None:
+async def _require_confirm_change_autolock_delay(delay_ms: int) -> None:
+    from trezor.strings import format_duration_ms
+
+    unit_plurals = {
+        "millisecond": TR.plurals__lock_after_x_milliseconds,
+        "second": TR.plurals__lock_after_x_seconds,
+        "minute": TR.plurals__lock_after_x_minutes,
+        "hour": TR.plurals__lock_after_x_hours,
+    }
+
     await confirm_action(
-        ctx,
         "set_autolock_delay",
-        "Auto-lock delay",
-        description="Do you really want to auto-lock your device after {}?",
-        description_param=format_duration_ms(delay_ms),
-        br_code=ButtonRequestType.ProtectCall,
+        TR.auto_lock__title,
+        description=TR.auto_lock__change_template,
+        description_param=format_duration_ms(delay_ms, unit_plurals),
+        br_code=BRT_PROTECT_CALL,
+        prompt_screen=True,
     )
 
 
-async def require_confirm_safety_checks(
-    ctx: wire.GenericContext, level: SafetyCheckLevel
-) -> None:
-    if level == SafetyCheckLevel.PromptAlways:
+async def _require_confirm_safety_checks(level: SafetyCheckLevel) -> None:
+    from trezor.enums import SafetyCheckLevel
+
+    if level == SafetyCheckLevel.Strict:
         await confirm_action(
-            ctx,
             "set_safety_checks",
-            "Safety override",
-            hold=True,
-            verb="Hold to confirm",
-            description="Trezor will allow you to approve some actions which might be unsafe.",
-            action="Are you sure?",
-            reverse=True,
-            larger_vspace=True,
-            br_code=ButtonRequestType.ProtectCall,
+            TR.safety_checks__title,
+            description=TR.safety_checks__enforce_strict,
+            br_code=BRT_PROTECT_CALL,
+            prompt_screen=True,
         )
-    elif level == SafetyCheckLevel.PromptTemporarily:
-        await confirm_action(
-            ctx,
-            "set_safety_checks",
-            "Safety override",
-            hold=True,
-            verb="Hold to confirm",
-            description="Trezor will temporarily allow you to approve some actions which might be unsafe.",
-            action="Are you sure?",
-            reverse=True,
-            br_code=ButtonRequestType.ProtectCall,
+    elif level in (SafetyCheckLevel.PromptAlways, SafetyCheckLevel.PromptTemporarily):
+        description = (
+            TR.safety_checks__approve_unsafe_temporary
+            if level == SafetyCheckLevel.PromptTemporarily
+            else TR.safety_checks__approve_unsafe_always
         )
-    elif level == SafetyCheckLevel.Strict:
         await confirm_action(
-            ctx,
             "set_safety_checks",
-            "Safety checks",
-            description="Do you really want to enforce strict safety checks (recommended)?",
-            br_code=ButtonRequestType.ProtectCall,
+            TR.safety_checks__title_safety_override,
+            TR.words__are_you_sure,
+            description,
+            hold=True,
+            verb=TR.buttons__hold_to_confirm,
+            reverse=True,
+            br_code=BRT_PROTECT_CALL,
+            prompt_screen=True,
         )
     else:
         raise ValueError  # enum value out of range
 
 
-async def require_confirm_experimental_features(
-    ctx: wire.GenericContext, enable: bool
-) -> None:
+async def _require_confirm_experimental_features(enable: bool) -> None:
     if enable:
         await confirm_action(
-            ctx,
             "set_experimental_features",
-            "Experimental mode",
-            description="Enable experimental features?",
-            action="Only for development and beta testing!",
+            TR.experimental_mode__title,
+            TR.experimental_mode__only_for_dev,
+            TR.experimental_mode__enable,
             reverse=True,
-            br_code=ButtonRequestType.ProtectCall,
+            br_code=BRT_PROTECT_CALL,
+            prompt_screen=True,
+        )
+
+
+if utils.USE_HAPTIC:
+
+    async def _require_confirm_haptic_feedback(enable: bool) -> None:
+        await confirm_action(
+            "haptic_feedback__settings",
+            TR.haptic_feedback__title,
+            TR.haptic_feedback__enable if enable else TR.haptic_feedback__disable,
+            subtitle=TR.haptic_feedback__subtitle,
+            br_code=BRT_PROTECT_CALL,
+            prompt_screen=True,
         )

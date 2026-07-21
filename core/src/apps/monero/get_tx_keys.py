@@ -14,30 +14,35 @@ encrypted using the private spend key. Here the host sends it back
 in `MoneroGetTxKeyRequest.tx_enc_keys` to be decrypted and yet again encrypted
 using the view key, which the host possess.
 """
+
+from micropython import const
 from typing import TYPE_CHECKING
 
-from trezor import utils, wire
-from trezor.messages import MoneroGetTxKeyAck, MoneroGetTxKeyRequest
-
-from apps.common import paths
 from apps.common.keychain import auto_keychain
-from apps.monero import layout, misc
-from apps.monero.xmr import chacha_poly, crypto, crypto_helpers
 
-_GET_TX_KEY_REASON_TX_DERIVATION = 1
+_GET_TX_KEY_REASON_TX_DERIVATION = const(1)
 
 if TYPE_CHECKING:
+    from trezor.messages import MoneroGetTxKeyAck, MoneroGetTxKeyRequest
+
     from apps.common.keychain import Keychain
 
 
 @auto_keychain(__name__)
 async def get_tx_keys(
-    ctx: wire.Context, msg: MoneroGetTxKeyRequest, keychain: Keychain
+    msg: MoneroGetTxKeyRequest, keychain: Keychain
 ) -> MoneroGetTxKeyAck:
-    await paths.validate_path(ctx, keychain, msg.address_n)
+    from trezor import utils, wire
+    from trezor.messages import MoneroGetTxKeyAck
+
+    from apps.common import paths
+    from apps.monero import layout, misc
+    from apps.monero.xmr import chacha_poly, crypto, crypto_helpers
+
+    await paths.validate_path(keychain, msg.address_n)
 
     do_deriv = msg.reason == _GET_TX_KEY_REASON_TX_DERIVATION
-    await layout.require_confirm_tx_key(ctx, export_key=not do_deriv)
+    await layout.require_confirm_tx_key(export_key=not do_deriv)
 
     creds = misc.get_creds(keychain, msg.address_n, msg.network_type)
 

@@ -29,9 +29,6 @@ class MemoryReaderWriter:
             self.buffer = buffer
             self.woffset = len(buffer)
 
-    def is_empty(self) -> bool:
-        return self.offset == len(self.buffer) or self.offset == self.woffset
-
     def preallocate(self, size: int) -> None:
         self.buffer = bytearray(size)
         self.offset = 0
@@ -62,15 +59,17 @@ class MemoryReaderWriter:
         return nread
 
     def write(self, buf: bytes) -> None:
-        assert isinstance(self.buffer, bytearray)
+        buffer = self.buffer  # local_cache_attribute
+
+        assert isinstance(buffer, bytearray)
         nwritten = len(buf)
-        nall = len(self.buffer)
+        nall = len(buffer)
         towrite = nwritten
         bufoff = 0
 
         # Fill existing place in the buffer
         while towrite > 0 and nall - self.woffset > 0:
-            self.buffer[self.woffset] = buf[bufoff]
+            buffer[self.woffset] = buf[bufoff]
             self.woffset += 1
             bufoff += 1
             towrite -= 1
@@ -86,7 +85,7 @@ class MemoryReaderWriter:
                 bufoff += 1
                 towrite -= 1
 
-            self.buffer.extend(chunk)
+            buffer.extend(chunk)
             if self.do_gc:
                 chunk = None  # dereference
                 gc.collect()

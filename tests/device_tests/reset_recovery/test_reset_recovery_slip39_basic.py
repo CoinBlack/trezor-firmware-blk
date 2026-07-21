@@ -15,130 +15,83 @@
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
 import itertools
-from unittest import mock
+import typing as t
 
 import pytest
 
 from trezorlib import btc, device, messages
-from trezorlib.debuglink import TrezorClientDebugLink as Client
-from trezorlib.messages import BackupType, ButtonRequestType as B
+from trezorlib.debuglink import DebugSession as Session
+from trezorlib.debuglink import TrezorTestContext as Client
+from trezorlib.messages import BackupType
 from trezorlib.tools import parse_path
 
-from ...common import click_through, read_and_confirm_mnemonic, recovery_enter_shares
+from ...common import MOCK_GET_ENTROPY
+from ...input_flows import (
+    InputFlowSlip39BasicRecovery,
+    InputFlowSlip39BasicResetRecovery,
+)
+from ...translations import set_language
 
-EXTERNAL_ENTROPY = b"zlutoucky kun upel divoke ody" * 2
-MOCK_OS_URANDOM = mock.Mock(return_value=EXTERNAL_ENTROPY)
 
-
-@pytest.mark.skip_t1
+@pytest.mark.models("core")
 @pytest.mark.setup_client(uninitialized=True)
-@mock.patch("os.urandom", MOCK_OS_URANDOM)
 def test_reset_recovery(client: Client):
-    mnemonics = reset(client)
-    address_before = btc.get_address(client, "Bitcoin", parse_path("m/44h/0h/0h/0/0"))
+    session = client.get_seedless_session()
+    mnemonics = reset(session)
+    session = client.get_session()
+    address_before = btc.get_address(session, "Bitcoin", parse_path("m/44h/0h/0h/0/0"))
 
     for share_subset in itertools.combinations(mnemonics, 3):
-        device.wipe(client)
+        session = client.get_seedless_session()
+        lang = client.features.language or "en"
+        device.wipe(session)
+        session = client.get_seedless_session()
+        set_language(session, lang[:2])
         selected_mnemonics = share_subset
-        recover(client, selected_mnemonics)
+        recover(session, selected_mnemonics)
+        session = client.get_session()
         address_after = btc.get_address(
-            client, "Bitcoin", parse_path("m/44h/0h/0h/0/0")
+            session, "Bitcoin", parse_path("m/44h/0h/0h/0/0")
         )
         assert address_before == address_after
 
 
-def reset(client: Client, strength=128):
-    all_mnemonics = []
-
-    def input_flow():
-        # 1. Confirm Reset
-        # 2. Backup your seed
-        # 3. Confirm warning
-        # 4. shares info
-        # 5. Set & Confirm number of shares
-        # 6. threshold info
-        # 7. Set & confirm threshold value
-        # 8. Confirm show seeds
-        yield from click_through(client.debug, screens=8, code=B.ResetDevice)
-
-        # show & confirm shares
-        for _ in range(5):
-            # mnemonic phrases
-            mnemonic = yield from read_and_confirm_mnemonic(client.debug)
-            all_mnemonics.append(mnemonic)
-
-            # Confirm continue to next share
-            br = yield
-            assert br.code == B.Success
-            client.debug.press_yes()
-
-        # safety warning
-        br = yield
-        assert br.code == B.Success
-        client.debug.press_yes()
-
-    with client:
-        client.set_expected_responses(
-            [
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.EntropyRequest(),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-            ]
-            + [
-                # individual mnemonic
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-            ]
-            * 5  # number of shares
-            + [
-                messages.ButtonRequest(code=B.Success),
-                messages.Success,
-                messages.Features,
-            ]
-        )
-        client.set_input_flow(input_flow)
+def reset(session: Session, strength: int = 128) -> list[str]:
+    with session.test_ctx as client:
+        IF = InputFlowSlip39BasicResetRecovery(session)
+        client.set_input_flow(IF.get())
 
         # No PIN, no passphrase, don't display random
-        device.reset(
-            client,
-            display_random=False,
+        device.setup(
+            session,
             strength=strength,
             passphrase_protection=False,
             pin_protection=False,
             label="test",
-            language="en-US",
             backup_type=BackupType.Slip39_Basic,
+            entropy_check_count=0,
+            _get_entropy=MOCK_GET_ENTROPY,
         )
 
     # Check if device is properly initialized
-    assert client.features.initialized is True
-    assert client.features.needs_backup is False
-    assert client.features.pin_protection is False
-    assert client.features.passphrase_protection is False
+    assert session.features.initialized is True
+    assert (
+        session.features.backup_availability == messages.BackupAvailability.NotAvailable
+    )
+    assert session.features.pin_protection is False
+    assert session.features.passphrase_protection is False
+    assert session.features.backup_type is BackupType.Slip39_Basic_Extendable
 
-    return all_mnemonics
+    return IF.mnemonics
 
 
-def recover(client: Client, shares):
-    debug = client.debug
-
-    def input_flow():
-        yield  # Confirm Recovery
-        debug.press_yes()
-        # run recovery flow
-        yield from recovery_enter_shares(debug, shares)
-
-    with client:
-        client.set_input_flow(input_flow)
-        ret = device.recover(client, pin_protection=False, label="label")
+def recover(session: Session, shares: t.Sequence[str]):
+    with session.test_ctx as client:
+        IF = InputFlowSlip39BasicRecovery(session, shares)
+        client.set_input_flow(IF.get())
+        device.recover(session, pin_protection=False, label="label")
 
     # Workflow successfully ended
-    assert ret == messages.Success(message="Device recovered")
-    assert client.features.pin_protection is False
-    assert client.features.passphrase_protection is False
+    assert session.features.pin_protection is False
+    assert session.features.passphrase_protection is False
+    assert session.features.backup_type is BackupType.Slip39_Basic_Extendable

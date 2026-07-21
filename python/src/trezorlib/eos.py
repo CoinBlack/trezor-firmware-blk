@@ -1,6 +1,6 @@
 # This file is part of the Trezor project.
 #
-# Copyright (C) 2012-2022 SatoshiLabs and contributors
+# Copyright (C) SatoshiLabs and contributors
 #
 # This library is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License version 3
@@ -18,12 +18,11 @@ from datetime import datetime
 from typing import TYPE_CHECKING, List, Tuple
 
 from . import exceptions, messages
-from .tools import b58decode, expect, session
+from .tools import b58decode, workflow
 
 if TYPE_CHECKING:
-    from .client import TrezorClient
+    from .client import Session
     from .tools import Address
-    from .protobuf import MessageType
 
 
 def name_to_number(name: str) -> int:
@@ -319,19 +318,23 @@ def parse_transaction_json(
 # ====== Client functions ====== #
 
 
-@expect(messages.EosPublicKey)
+@workflow(capability=messages.Capability.EOS)
 def get_public_key(
-    client: "TrezorClient", n: "Address", show_display: bool = False
-) -> "MessageType":
-    response = client.call(
-        messages.EosGetPublicKey(address_n=n, show_display=show_display)
+    session: "Session", n: "Address", show_display: bool = False
+) -> messages.EosPublicKey:
+    return session.call(
+        messages.EosGetPublicKey(address_n=n, show_display=show_display),
+        expect=messages.EosPublicKey,
     )
-    return response
 
 
-@session
+@workflow(capability=messages.Capability.EOS)
 def sign_tx(
-    client: "TrezorClient", address: "Address", transaction: dict, chain_id: str
+    session: "Session",
+    address: "Address",
+    transaction: dict,
+    chain_id: str,
+    chunkify: bool = False,
 ) -> messages.EosSignedTx:
     header, actions = parse_transaction_json(transaction)
 
@@ -340,13 +343,14 @@ def sign_tx(
         chain_id=bytes.fromhex(chain_id),
         header=header,
         num_actions=len(actions),
+        chunkify=chunkify,
     )
 
-    response = client.call(msg)
+    response = session.call(msg)
 
     try:
         while isinstance(response, messages.EosTxActionRequest):
-            response = client.call(actions.pop(0))
+            response = session.call(actions.pop(0))
     except IndexError:
         # pop from empty list
         raise exceptions.TrezorException(

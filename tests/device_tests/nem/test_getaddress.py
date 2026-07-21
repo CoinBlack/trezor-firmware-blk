@@ -17,7 +17,7 @@
 import pytest
 
 from trezorlib import nem
-from trezorlib.debuglink import TrezorClientDebugLink as Client
+from trezorlib.debuglink import DebugSession as Session
 from trezorlib.tools import parse_path
 
 from ...common import MNEMONIC12
@@ -25,17 +25,27 @@ from ...common import MNEMONIC12
 
 @pytest.mark.altcoin
 @pytest.mark.nem
+@pytest.mark.models("t1b1", "t2t1")
 @pytest.mark.setup_client(mnemonic=MNEMONIC12)
-def test_nem_getaddress(client: Client):
+@pytest.mark.parametrize("chunkify", (True, False))
+def test_nem_getaddress(session: Session, chunkify: bool):
     assert (
         nem.get_address(
-            client, parse_path("m/44h/1h/0h/0h/0h"), 0x68, show_display=True
+            session,
+            parse_path("m/44h/1h/0h/0h/0h"),
+            0x68,
+            show_display=True,
+            chunkify=chunkify,
         )
         == "NB3JCHVARQNGDS3UVGAJPTFE22UQFGMCQGHUBWQN"
     )
     assert (
         nem.get_address(
-            client, parse_path("m/44h/1h/0h/0h/0h"), 0x98, show_display=True
+            session,
+            parse_path("m/44h/1h/0h/0h/0h"),
+            0x98,
+            show_display=True,
+            chunkify=chunkify,
         )
         == "TB3JCHVARQNGDS3UVGAJPTFE22UQFGMCQHSBNBMF"
     )

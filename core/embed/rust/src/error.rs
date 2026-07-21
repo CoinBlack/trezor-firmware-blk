@@ -1,31 +1,40 @@
-use core::{
-    convert::{Infallible, TryInto},
-    num::TryFromIntError,
-};
-
-use cstr_core::CStr;
+use core::{convert::Infallible, ffi::CStr, num::TryFromIntError};
 
 #[cfg(feature = "micropython")]
-use crate::micropython::{ffi, obj::Obj, qstr::Qstr};
+use {
+    crate::micropython::{ffi, obj::Obj, qstr::Qstr},
+    core::convert::TryInto,
+};
 
 #[allow(clippy::enum_variant_names)] // We mimic the Python exception classnames here.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Error {
     TypeError,
     OutOfRange,
     MissingKwargs,
     AllocationFailed,
+    EOFError,
+    IndexError,
     #[cfg(feature = "micropython")]
     CaughtException(Obj),
     #[cfg(feature = "micropython")]
     KeyError(Obj),
     #[cfg(feature = "micropython")]
     AttributeError(Qstr),
-    #[cfg(feature = "micropython")]
     ValueError(&'static CStr),
     #[cfg(feature = "micropython")]
     ValueErrorParam(&'static CStr, Obj),
+    RuntimeError(&'static CStr),
+    NotImplementedError,
 }
+
+macro_rules! value_error {
+    ($msg:expr) => {
+        $crate::error::Error::ValueError($msg)
+    };
+}
+
+pub(crate) use value_error;
 
 #[cfg(feature = "micropython")]
 impl Error {
@@ -42,6 +51,7 @@ impl Error {
                 Error::OutOfRange => ffi::mp_obj_new_exception(&ffi::mp_type_OverflowError),
                 Error::MissingKwargs => ffi::mp_obj_new_exception(&ffi::mp_type_TypeError),
                 Error::AllocationFailed => ffi::mp_obj_new_exception(&ffi::mp_type_MemoryError),
+                Error::IndexError => ffi::mp_obj_new_exception(&ffi::mp_type_IndexError),
                 Error::CaughtException(obj) => obj,
                 Error::KeyError(key) => {
                     ffi::mp_obj_new_exception_args(&ffi::mp_type_KeyError, 1, &key)
@@ -63,6 +73,17 @@ impl Error {
                 }
                 Error::AttributeError(attr) => {
                     ffi::mp_obj_new_exception_args(&ffi::mp_type_AttributeError, 1, &attr.into())
+                }
+                Error::EOFError => ffi::mp_obj_new_exception(&ffi::mp_type_EOFError),
+                Error::RuntimeError(msg) => {
+                    if let Ok(msg) = msg.try_into() {
+                        ffi::mp_obj_new_exception_args(&ffi::mp_type_RuntimeError, 1, &msg)
+                    } else {
+                        ffi::mp_obj_new_exception(&ffi::mp_type_RuntimeError)
+                    }
+                }
+                Error::NotImplementedError => {
+                    ffi::mp_obj_new_exception(&ffi::mp_type_NotImplementedError)
                 }
             }
         }
